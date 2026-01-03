@@ -3,11 +3,20 @@
 
 import { useRef, useState, useMemo, Suspense, useEffect } from 'react';
 import { Canvas, useFrame, useLoader } from '@react-three/fiber';
-import { OrbitControls, Center, Grid, RoundedBox, Html, Text, Outlines } from '@react-three/drei';
+import { OrbitControls, Center, Grid, RoundedBox, Html, Text, Outlines, Float } from '@react-three/drei';
 import { Physics, useBox, usePlane } from '@react-three/cannon';
 import * as THREE from 'three';
-import { Truck, Ruler, RefreshCw, Calculator, Sliders, Navigation, AlertTriangle, Layers, Trash2, MousePointer2, Download, Box, Table2 } from 'lucide-react';
+import { Truck, Ruler, RefreshCw, Calculator, Sliders, Navigation, AlertTriangle, Layers, Trash2, MousePointer2, Download, Box, Table2, TreePine, Palette } from 'lucide-react';
 import { useTheme } from '@/components/Providers';
+
+// --- CONFIGURATION ---
+const WOOD_TYPES = {
+  walnut: { name: 'Black Walnut', color: '#5d4037', priceMult: 2.5, roughness: 0.6 },
+  oak: { name: 'White Oak', color: '#e0cda7', priceMult: 1.8, roughness: 0.7 },
+  cherry: { name: 'American Cherry', color: '#8b4513', priceMult: 2.0, roughness: 0.5 },
+  teak: { name: 'Burmese Teak', color: '#c19a6b', priceMult: 3.0, roughness: 0.8 },
+  pine: { name: 'Yellow Pine', color: '#f4e99b', priceMult: 1.0, roughness: 0.9 },
+};
 
 // --- UTILS ---
 const calculateBoardFeet = (l_ft, w_in, t_in) => (l_ft * w_in * t_in) / 12;
@@ -116,7 +125,7 @@ function RCDrivingSaw({ active, onUpdatePos, onClickToCut }) {
 }
 
 // --- 4. PARTICLE SYSTEM ---
-function WoodExplosion({ position }) {
+function WoodExplosion({ position, color }) {
   const count = 30;
   const meshRef = useRef();
   const dummy = useMemo(() => new THREE.Object3D(), []);
@@ -156,16 +165,21 @@ function WoodExplosion({ position }) {
   return (
     <instancedMesh ref={meshRef} args={[null, null, count]}>
         <boxGeometry args={[0.08, 0.08, 0.08]} />
-        <meshStandardMaterial color="#C19A6B" />
+        <meshStandardMaterial color={color || "#C19A6B"} />
     </instancedMesh>
   );
 }
 
-// --- 5. PLANK COMPONENT ---
-function Plank({ data, isSelected, onSelect, onUpdate, sawActive, physicsMode }) {
+// --- 5. PLANK COMPONENT (ENHANCED) ---
+function Plank({ data, isSelected, onSelect, onUpdate, sawActive, physicsMode, woodTypeKey }) {
   const meshRef = useRef();
+  const woodInfo = WOOD_TYPES[woodTypeKey] || WOOD_TYPES.oak;
+
+  // Attempt to load texture, fallback if missing
   const baseTexture = useLoader(THREE.TextureLoader, '/wood_texture.jpg');
+  
   const texture = useMemo(() => {
+    if(!baseTexture) return null;
     const t = baseTexture.clone();
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.rotation = Math.PI / 2; 
@@ -194,36 +208,76 @@ function Plank({ data, isSelected, onSelect, onUpdate, sawActive, physicsMode })
     }
   });
 
+  const Material = (
+    <meshStandardMaterial 
+      map={texture} 
+      color={woodInfo.color} 
+      emissive={isSelected ? "#aa4400" : "#000000"} 
+      emissiveIntensity={isSelected ? 0.2 : 0} 
+      roughness={woodInfo.roughness} 
+    />
+  );
+
   if (physicsMode) {
       return (
         <RoundedBox ref={physRef} args={[1, 1, 1]} scale={[data.width, data.length, data.thickness]} radius={0.02} smoothness={4} castShadow receiveShadow>
-            <meshStandardMaterial map={texture} color="#C19A6B" roughness={0.5} />
+            {Material}
         </RoundedBox>
       );
   }
 
   return (
-    <RoundedBox 
-        ref={meshRef}
-        args={[1, 1, 1]} 
-        scale={[data.width, data.length, data.thickness]}
-        position={[data.x, 0, data.z]} 
-        radius={0.02} smoothness={4} rotation={[Math.PI / 2, 0, 0]}
-        castShadow receiveShadow
-        onPointerDown={(e) => {
-            if (sawActive) return;
-            e.stopPropagation();
-            onSelect(data.id);
-            dragging.current = true;
-            document.body.style.cursor = 'grabbing';
-        }}
-        onPointerUp={() => { dragging.current = false; document.body.style.cursor = 'auto'; }}
-        onPointerOver={() => !sawActive && (document.body.style.cursor = 'grab')}
-        onPointerOut={() => (document.body.style.cursor = 'auto')}
-    >
-        <meshStandardMaterial map={texture} color={isSelected ? "#ffb347" : "#C19A6B"} emissive={isSelected ? "#aa4400" : "#000000"} emissiveIntensity={isSelected ? 0.2 : 0} roughness={0.5} />
-        {isSelected && <Outlines thickness={0.05} color="orange" />}
-    </RoundedBox>
+    <group>
+        <RoundedBox 
+            ref={meshRef}
+            args={[1, 1, 1]} 
+            scale={[data.width, data.length, data.thickness]}
+            position={[data.x, 0, data.z]} 
+            radius={0.02} smoothness={4} rotation={[Math.PI / 2, 0, 0]}
+            castShadow receiveShadow
+            onPointerDown={(e) => {
+                if (sawActive) return;
+                e.stopPropagation();
+                onSelect(data.id);
+                dragging.current = true;
+                document.body.style.cursor = 'grabbing';
+            }}
+            onPointerUp={() => { dragging.current = false; document.body.style.cursor = 'auto'; }}
+            onPointerOver={() => !sawActive && (document.body.style.cursor = 'grab')}
+            onPointerOut={() => (document.body.style.cursor = 'auto')}
+        >
+            {Material}
+            {isSelected && <Outlines thickness={0.05} color="orange" />}
+        </RoundedBox>
+
+        {/* 3D DIMENSION LABELS (CAD STYLE) */}
+        {isSelected && (
+          <group position={[data.x, data.thickness + 0.2, data.z]}>
+             {/* Length Label */}
+             <Text 
+               position={[0, 0, -data.length/2 - 0.2]} 
+               rotation={[-Math.PI/2, 0, 0]} 
+               fontSize={0.25} 
+               color="black" 
+               anchorX="center" 
+               anchorY="middle"
+             >
+                {(data.length * 2).toFixed(1)}&apos;
+             </Text>
+             {/* Width Label */}
+             <Text 
+               position={[data.width/2 + 0.2, 0, 0]} 
+               rotation={[-Math.PI/2, 0, -Math.PI/2]} 
+               fontSize={0.25} 
+               color="black" 
+               anchorX="center" 
+               anchorY="middle"
+             >
+                {(data.width * 12).toFixed(0)}&quot;
+             </Text>
+          </group>
+        )}
+    </group>
   );
 }
 
@@ -237,6 +291,7 @@ export default function LogConfigurator() {
   const [inputMode, setInputMode] = useState('sliders'); 
   const [masterDims, setMasterDims] = useState({ width: 1.5, length: 7.0, thickness: 0.2 });
   const [physicsEnabled, setPhysicsEnabled] = useState(false);
+  const [activeWoodType, setActiveWoodType] = useState('walnut'); // NEW: Wood State
   
   const [planks, setPlanks] = useState([{ id: 'master', width: 1.5, length: 7.0, thickness: 0.2, x: 0, z: 0 }]);
   const [selectedId, setSelectedId] = useState(null);
@@ -248,9 +303,13 @@ export default function LogConfigurator() {
 
   const { darkMode } = useTheme();
 
+  // Price Calculation includes Wood Type Multiplier
+  const woodPriceMult = WOOD_TYPES[activeWoodType].priceMult;
   const totalVolume = planks.reduce((acc, p) => acc + (p.width * p.length * p.thickness), 0);
   const totalBF = planks.reduce((acc, p) => acc + calculateBoardFeet(p.length*2, p.width*12, p.thickness*10), 0);
-  const price = Math.floor(totalVolume * 300);
+  const basePrice = totalVolume * 300;
+  const finalPrice = Math.floor(basePrice * woodPriceMult);
+
   const activeDims = selectedId ? planks.find(p => p.id === selectedId) || masterDims : masterDims;
 
   const handleDimChange = (key, value) => {
@@ -281,13 +340,14 @@ export default function LogConfigurator() {
   const deleteSelected = () => { if (!selectedId) return; setPlanks(prev => prev.filter(p => p.id !== selectedId)); setSelectedId(null); };
 
   const downloadCSV = () => {
-      const headers = ["ID", "Length (ft)", "Width (in)", "Thickness (in)", "Board Feet"].join(",");
+      const headers = ["ID", "Wood Type", "Length (ft)", "Width (in)", "Thickness (in)", "Board Feet"].join(",");
       const rows = planks.map((p, i) => {
           const l = (p.length * 2).toFixed(2);
           const w = (p.width * 12).toFixed(2);
           const t = (p.thickness * 10).toFixed(2);
           const bf = calculateBoardFeet(l, w, t).toFixed(2);
-          return [`Piece #${i+1}`, l, w, t, bf].join(",");
+          const typeName = WOOD_TYPES[activeWoodType].name;
+          return [`Piece #${i+1}`, typeName, l, w, t, bf].join(",");
       });
       const csvContent = "data:text/csv;charset=utf-8," + [headers, ...rows].join("\n");
       const encodedUri = encodeURI(csvContent);
@@ -323,11 +383,12 @@ export default function LogConfigurator() {
     const newPlanks = [...planks];
     newPlanks.splice(hitIndex, 1, newLeft, newRight);
     setPlanks(newPlanks);
-    setExplosions(prev => [...prev, { id: Date.now(), pos: [x, 0.5, z] }]);
+    // Explosion inherits wood color
+    setExplosions(prev => [...prev, { id: Date.now(), pos: [x, 0.5, z], color: WOOD_TYPES[activeWoodType].color }]);
   };
 
   return (
-    <div className={`flex flex-col lg:flex-row h-[750px] rounded-3xl overflow-hidden shadow-2xl border transition-colors duration-500 ${darkMode ? 'bg-stone-900 border-stone-800' : 'bg-stone-100 border-stone-200'}`}>
+    <div className={`flex flex-col lg:flex-row h-[850px] rounded-3xl overflow-hidden shadow-2xl border transition-colors duration-500 ${darkMode ? 'bg-stone-900 border-stone-800' : 'bg-stone-100 border-stone-200'}`}>
       
       {/* LEFT: 3D VIEWPORT */}
       <div className={`relative flex-1 ${darkMode ? 'bg-stone-800' : 'bg-[#f0f0f0]'}`}>
@@ -348,12 +409,12 @@ export default function LogConfigurator() {
                 <Center top={viewMode === 'studio'}> 
                     <group>
                         {!physicsEnabled && <RCDrivingSaw active={sawActive} onUpdatePos={setSawPos} onClickToCut={attemptCut} />}
-                        {explosions.map(ex => <WoodExplosion key={ex.id} position={ex.pos} />)}
+                        {explosions.map(ex => <WoodExplosion key={ex.id} position={ex.pos} color={ex.color} />)}
                         <group>
                             {viewMode === 'truck' ? (
-                                <IndianTruck physicsEnabled={physicsEnabled}>{planks.map(p => <Plank key={p.id} data={p} isSelected={selectedId === p.id} onSelect={setSelectedId} onUpdate={handlePlankUpdate} sawActive={sawActive} physicsMode={physicsEnabled} />)}</IndianTruck>
+                                <IndianTruck physicsEnabled={physicsEnabled}>{planks.map(p => <Plank key={p.id} data={p} isSelected={selectedId === p.id} onSelect={setSelectedId} onUpdate={handlePlankUpdate} sawActive={sawActive} physicsMode={physicsEnabled} woodTypeKey={activeWoodType} />)}</IndianTruck>
                             ) : (
-                                <>{physicsEnabled && <Floor />}{planks.map(p => <Plank key={p.id} data={p} isSelected={selectedId === p.id} onSelect={setSelectedId} onUpdate={handlePlankUpdate} sawActive={sawActive} physicsMode={physicsEnabled} />)}</>
+                                <>{physicsEnabled && <Floor />}{planks.map(p => <Plank key={p.id} data={p} isSelected={selectedId === p.id} onSelect={setSelectedId} onUpdate={handlePlankUpdate} sawActive={sawActive} physicsMode={physicsEnabled} woodTypeKey={activeWoodType} />)}</>
                             )}
                         </group>
                     </group>
@@ -372,6 +433,28 @@ export default function LogConfigurator() {
         <div className="mb-6 flex-shrink-0">
             <h3 className="text-2xl font-serif mb-1">{selectedId ? "Edit Piece" : "Master Log"}</h3>
             <p className={`text-sm ${darkMode ? 'text-stone-400' : 'text-stone-500'}`}>{selectedId ? "Drag to move. Sliders resize selected." : "Define main dimensions. We mill to order."}</p>
+        </div>
+
+        {/* WOOD TYPE SELECTOR (NEW) */}
+        <div className="mb-6">
+            <label className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 block flex items-center gap-2"><Palette className="w-3 h-3"/> Material Select</label>
+            <div className="grid grid-cols-5 gap-2">
+                {Object.entries(WOOD_TYPES).map(([key, info]) => (
+                    <button 
+                        key={key} 
+                        onClick={() => setActiveWoodType(key)}
+                        className={`aspect-square rounded-lg border-2 transition-all relative group ${activeWoodType === key ? 'border-orange-500 scale-110 shadow-md' : 'border-transparent hover:scale-105'}`}
+                        style={{ backgroundColor: info.color }}
+                        title={info.name}
+                    >
+                        {activeWoodType === key && <div className="absolute inset-0 flex items-center justify-center text-white/50"><TreePine className="w-4 h-4" /></div>}
+                        <span className="absolute -bottom-6 left-1/2 -translate-x-1/2 bg-black text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap z-20 pointer-events-none">{info.name}</span>
+                    </button>
+                ))}
+            </div>
+            <div className="text-right text-xs mt-1 text-stone-400 font-mono">
+                Multiplier: x{WOOD_TYPES[activeWoodType].priceMult.toFixed(1)}
+            </div>
         </div>
 
         {/* CONTROLS SCROLL AREA */}
@@ -421,14 +504,13 @@ export default function LogConfigurator() {
                     </div>
                     <button onClick={downloadCSV} className="text-[10px] font-bold bg-orange-100 text-orange-700 px-2 py-1 rounded hover:bg-orange-200 flex items-center gap-1"><Download className="w-3 h-3"/> CSV</button>
                 </div>
-                {/* Scrollable Rows - FIXED QUOTES HERE */}
+                {/* Scrollable Rows */}
                 <div className="max-h-48 overflow-y-auto p-2 space-y-1 custom-scrollbar">
                     {planks.map((p, i) => {
                         const vol = calculateBoardFeet(p.length*2, p.width*12, p.thickness*10).toFixed(1);
                         return (
                             <div key={p.id} onClick={() => setSelectedId(p.id)} className={`grid grid-cols-3 gap-2 p-2 rounded text-xs cursor-pointer items-center border transition-all ${selectedId === p.id ? 'bg-orange-600 text-white border-orange-600' : (darkMode ? 'bg-stone-900 border-stone-700 hover:border-stone-500' : 'bg-white border-stone-200 hover:border-orange-300')}`}>
                                 <span className="font-bold flex items-center gap-1 col-span-1">{selectedId === p.id && <MousePointer2 className="w-3 h-3"/>} #{i+1}</span>
-                                {/* ESCAPED QUOTES BELOW */}
                                 <span className="font-mono text-center col-span-1">{(p.length*2).toFixed(1)}&apos; x {(p.width*12).toFixed(0)}&quot;</span>
                                 <span className="text-right opacity-70 col-span-1">{vol} BF</span>
                             </div>
@@ -445,8 +527,8 @@ export default function LogConfigurator() {
                 <span className="text-xl font-bold font-mono">{totalBF.toFixed(1)} <span className="text-sm font-normal text-stone-500">Board Feet</span></span>
             </div>
             <div className="flex justify-between items-end mb-4">
-                <span className="text-stone-500 text-sm">Est. Price</span>
-                <span className="text-4xl font-serif">${price}</span>
+                <span className="text-stone-500 text-sm">Est. Price ({WOOD_TYPES[activeWoodType].name})</span>
+                <span className="text-4xl font-serif">${finalPrice.toLocaleString()}</span>
             </div>
             <button className={`w-full py-4 rounded-xl font-bold transition transform active:scale-95 shadow-lg ${darkMode ? 'bg-white text-black hover:bg-stone-200' : 'bg-stone-900 text-white hover:bg-black'}`}>Request Custom Quote</button>
         </div>
