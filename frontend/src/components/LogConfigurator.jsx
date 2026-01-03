@@ -3,10 +3,10 @@
 
 import { useRef, useState, useMemo, Suspense, useEffect } from 'react';
 import { Canvas, useFrame, useLoader } from '@react-three/fiber';
-import { OrbitControls, Center, Grid, RoundedBox, Html, Text, Outlines, Float } from '@react-three/drei';
-import { Physics, useBox, usePlane } from '@react-three/cannon';
+import { OrbitControls, Center, Grid, RoundedBox, Cylinder, Html, Text, Outlines } from '@react-three/drei';
+import { Physics, useBox, useCylinder, usePlane } from '@react-three/cannon';
 import * as THREE from 'three';
-import { Truck, Ruler, RefreshCw, Calculator, Sliders, Navigation, AlertTriangle, Layers, Trash2, MousePointer2, Download, Box, Table2, TreePine, Palette } from 'lucide-react';
+import { Truck, Ruler, RefreshCw, Calculator, Sliders, Navigation, AlertTriangle, Layers, Trash2, MousePointer2, Download, Box, Table2, TreePine, Palette, Cylinder as CylinderIcon, Square } from 'lucide-react';
 import { useTheme } from '@/components/Providers';
 
 // --- CONFIGURATION ---
@@ -17,6 +17,14 @@ const WOOD_TYPES = {
   teak: { name: 'Burmese Teak', color: '#c19a6b', priceMult: 3.0, roughness: 0.8 },
   pine: { name: 'Yellow Pine', color: '#f4e99b', priceMult: 1.0, roughness: 0.9 },
 };
+
+const STANDARD_SIZES = [
+  { label: '2x4', w: 3.5, t: 1.5 },
+  { label: '2x6', w: 5.5, t: 1.5 },
+  { label: '4x4', w: 3.5, t: 3.5 },
+  { label: '1x6', w: 5.5, t: 0.75 },
+  { label: '1x12', w: 11.25, t: 0.75 },
+];
 
 // --- UTILS ---
 const calculateBoardFeet = (l_ft, w_in, t_in) => (l_ft * w_in * t_in) / 12;
@@ -170,14 +178,14 @@ function WoodExplosion({ position, color }) {
   );
 }
 
-// --- 5. PLANK COMPONENT (ENHANCED) ---
+// --- 5. PLANK COMPONENT (SHAPE AWARE) ---
 function Plank({ data, isSelected, onSelect, onUpdate, sawActive, physicsMode, woodTypeKey }) {
   const meshRef = useRef();
   const woodInfo = WOOD_TYPES[woodTypeKey] || WOOD_TYPES.oak;
+  const isRound = data.shape === 'round';
 
-  // Attempt to load texture, fallback if missing
+  // TEXTURE LOADING
   const baseTexture = useLoader(THREE.TextureLoader, '/wood_texture.jpg');
-  
   const texture = useMemo(() => {
     if(!baseTexture) return null;
     const t = baseTexture.clone();
@@ -189,12 +197,25 @@ function Plank({ data, isSelected, onSelect, onUpdate, sawActive, physicsMode, w
     return t;
   }, [baseTexture, data.length, data.width]);
 
-  const [physRef] = useBox(() => ({
+  // PHYSICS: CONDITIONAL HOOKS
+  // We must define both, but use the Ref based on shape
+  const [boxRef] = useBox(() => ({
     mass: 5, 
     position: [data.x, 2, data.z], 
     args: [data.width, data.length, data.thickness],
     type: 'Dynamic'
-  }), useRef(null)); 
+  }), useRef(null));
+
+  const [cylRef] = useCylinder(() => ({
+    mass: 5,
+    position: [data.x, 2, data.z],
+    args: [data.width/2, data.width/2, data.length, 16], // Radius Top, Radius Bottom, Height
+    rotation: [Math.PI / 2, 0, 0], // Rotate to lay flat
+    type: 'Dynamic'
+  }), useRef(null));
+
+  // Determine which ref to use for Rendering
+  const activeRef = physicsMode ? (isRound ? cylRef : boxRef) : meshRef;
 
   const dragging = useRef(false);
   const mousePlane = useRef(null);
@@ -218,23 +239,50 @@ function Plank({ data, isSelected, onSelect, onUpdate, sawActive, physicsMode, w
     />
   );
 
+  // LOGIC: If Physics is ON, we return the physics-enabled mesh wrapper.
+  // If Physics is OFF, we return the manual control wrapper.
+  
+  const Geometry = isRound ? (
+    <Cylinder args={[data.width/2, data.width/2, data.length, 24]} rotation={[Math.PI/2, 0, 0]} castShadow receiveShadow>
+        {Material}
+        {isSelected && <Outlines thickness={0.05} color="orange" />}
+    </Cylinder>
+  ) : (
+    <RoundedBox args={[1, 1, 1]} scale={[data.width, data.length, data.thickness]} radius={0.02} smoothness={4} rotation={[Math.PI/2, 0, 0]} castShadow receiveShadow>
+        {Material}
+        {isSelected && <Outlines thickness={0.05} color="orange" />}
+    </RoundedBox>
+  );
+
+  // 3D LABELS
+  const Labels = isSelected && (
+    <group position={[physicsMode ? 0 : data.x, (physicsMode ? 0 : data.thickness) + 0.2, physicsMode ? 0 : data.z]}>
+       <Text position={[0, 0, -data.length/2 - 0.2]} rotation={[-Math.PI/2, 0, 0]} fontSize={0.25} color="black" anchorX="center" anchorY="middle">
+          {(data.length * 2).toFixed(1)}&apos;
+       </Text>
+       <Text position={[data.width/2 + 0.2, 0, 0]} rotation={[-Math.PI/2, 0, -Math.PI/2]} fontSize={0.25} color="black" anchorX="center" anchorY="middle">
+          {(data.width * 12).toFixed(0)}&quot; {isRound ? 'Ø' : ''}
+       </Text>
+    </group>
+  );
+
   if (physicsMode) {
       return (
-        <RoundedBox ref={physRef} args={[1, 1, 1]} scale={[data.width, data.length, data.thickness]} radius={0.02} smoothness={4} castShadow receiveShadow>
-            {Material}
-        </RoundedBox>
+        <group ref={isRound ? cylRef : boxRef}>
+            {isRound ? (
+                <Cylinder args={[data.width/2, data.width/2, data.length, 24]} rotation={[Math.PI/2, 0, 0]} castShadow receiveShadow>{Material}</Cylinder>
+            ) : (
+                <RoundedBox args={[1, 1, 1]} scale={[data.width, data.length, data.thickness]} radius={0.02} smoothness={4} rotation={[Math.PI/2, 0, 0]} castShadow receiveShadow>{Material}</RoundedBox>
+            )}
+        </group>
       );
   }
 
   return (
     <group>
-        <RoundedBox 
+        <group 
             ref={meshRef}
-            args={[1, 1, 1]} 
-            scale={[data.width, data.length, data.thickness]}
-            position={[data.x, 0, data.z]} 
-            radius={0.02} smoothness={4} rotation={[Math.PI / 2, 0, 0]}
-            castShadow receiveShadow
+            position={[data.x, 0, data.z]}
             onPointerDown={(e) => {
                 if (sawActive) return;
                 e.stopPropagation();
@@ -246,37 +294,9 @@ function Plank({ data, isSelected, onSelect, onUpdate, sawActive, physicsMode, w
             onPointerOver={() => !sawActive && (document.body.style.cursor = 'grab')}
             onPointerOut={() => (document.body.style.cursor = 'auto')}
         >
-            {Material}
-            {isSelected && <Outlines thickness={0.05} color="orange" />}
-        </RoundedBox>
-
-        {/* 3D DIMENSION LABELS (CAD STYLE) */}
-        {isSelected && (
-          <group position={[data.x, data.thickness + 0.2, data.z]}>
-             {/* Length Label */}
-             <Text 
-               position={[0, 0, -data.length/2 - 0.2]} 
-               rotation={[-Math.PI/2, 0, 0]} 
-               fontSize={0.25} 
-               color="black" 
-               anchorX="center" 
-               anchorY="middle"
-             >
-                {(data.length * 2).toFixed(1)}&apos;
-             </Text>
-             {/* Width Label */}
-             <Text 
-               position={[data.width/2 + 0.2, 0, 0]} 
-               rotation={[-Math.PI/2, 0, -Math.PI/2]} 
-               fontSize={0.25} 
-               color="black" 
-               anchorX="center" 
-               anchorY="middle"
-             >
-                {(data.width * 12).toFixed(0)}&quot;
-             </Text>
-          </group>
-        )}
+            {Geometry}
+        </group>
+        {Labels}
     </group>
   );
 }
@@ -291,9 +311,9 @@ export default function LogConfigurator() {
   const [inputMode, setInputMode] = useState('sliders'); 
   const [masterDims, setMasterDims] = useState({ width: 1.5, length: 7.0, thickness: 0.2 });
   const [physicsEnabled, setPhysicsEnabled] = useState(false);
-  const [activeWoodType, setActiveWoodType] = useState('walnut'); // NEW: Wood State
+  const [activeWoodType, setActiveWoodType] = useState('walnut');
   
-  const [planks, setPlanks] = useState([{ id: 'master', width: 1.5, length: 7.0, thickness: 0.2, x: 0, z: 0 }]);
+  const [planks, setPlanks] = useState([{ id: 'master', width: 1.5, length: 7.0, thickness: 0.2, x: 0, z: 0, shape: 'box' }]);
   const [selectedId, setSelectedId] = useState(null);
   
   const [sawActive, setSawActive] = useState(false);
@@ -303,14 +323,36 @@ export default function LogConfigurator() {
 
   const { darkMode } = useTheme();
 
-  // Price Calculation includes Wood Type Multiplier
   const woodPriceMult = WOOD_TYPES[activeWoodType].priceMult;
   const totalVolume = planks.reduce((acc, p) => acc + (p.width * p.length * p.thickness), 0);
   const totalBF = planks.reduce((acc, p) => acc + calculateBoardFeet(p.length*2, p.width*12, p.thickness*10), 0);
   const basePrice = totalVolume * 300;
   const finalPrice = Math.floor(basePrice * woodPriceMult);
 
-  const activeDims = selectedId ? planks.find(p => p.id === selectedId) || masterDims : masterDims;
+  const activePlank = selectedId ? planks.find(p => p.id === selectedId) : planks[0]; // Default to first if none selected, or master logic
+  const activeDims = activePlank || masterDims;
+
+  const updatePlankShape = (newShape) => {
+    if (selectedId) {
+        setPlanks(prev => prev.map(p => p.id === selectedId ? { ...p, shape: newShape } : p));
+    } else {
+        // Update master (which is index 0 usually in this simplistic logic, or just add a flag for future creations)
+        setPlanks(prev => prev.map((p, i) => i === 0 ? { ...p, shape: newShape } : p));
+    }
+  };
+
+  const applyPreset = (preset) => {
+    // preset: { w: in, t: in }
+    const widthMeters = preset.w / 12;
+    const thicknessMeters = preset.t / 10; // Keeping scaling consistent with previous code
+    
+    if (selectedId) {
+        setPlanks(prev => prev.map(p => p.id === selectedId ? { ...p, width: widthMeters, thickness: thicknessMeters, shape: 'box' } : p));
+    } else {
+        setPlanks(prev => prev.map((p, i) => i === 0 ? { ...p, width: widthMeters, thickness: thicknessMeters, shape: 'box' } : p));
+        setMasterDims(prev => ({ ...prev, width: widthMeters, thickness: thicknessMeters }));
+    }
+  };
 
   const handleDimChange = (key, value) => {
       const val = parseFloat(value);
@@ -331,8 +373,7 @@ export default function LogConfigurator() {
           if (key === 'width') newDims.width = val / 12;      
           if (key === 'thickness') newDims.thickness = val / 10;
           setMasterDims(newDims);
-          setPlanks([{ ...newDims, id: 'master', x: 0, z: 0 }]);
-          setSelectedId(null);
+          setPlanks(prev => prev.map((p, i) => i === 0 ? { ...p, ...newDims } : p));
       }
   };
 
@@ -340,14 +381,15 @@ export default function LogConfigurator() {
   const deleteSelected = () => { if (!selectedId) return; setPlanks(prev => prev.filter(p => p.id !== selectedId)); setSelectedId(null); };
 
   const downloadCSV = () => {
-      const headers = ["ID", "Wood Type", "Length (ft)", "Width (in)", "Thickness (in)", "Board Feet"].join(",");
+      const headers = ["ID", "Wood Type", "Shape", "Length (ft)", "Width (in)", "Thickness (in)", "Board Feet"].join(",");
       const rows = planks.map((p, i) => {
           const l = (p.length * 2).toFixed(2);
           const w = (p.width * 12).toFixed(2);
           const t = (p.thickness * 10).toFixed(2);
           const bf = calculateBoardFeet(l, w, t).toFixed(2);
           const typeName = WOOD_TYPES[activeWoodType].name;
-          return [`Piece #${i+1}`, typeName, l, w, t, bf].join(",");
+          const shapeName = p.shape === 'round' ? 'Round Log' : 'Plank';
+          return [`Piece #${i+1}`, typeName, shapeName, l, w, t, bf].join(",");
       });
       const csvContent = "data:text/csv;charset=utf-8," + [headers, ...rows].join("\n");
       const encodedUri = encodeURI(csvContent);
@@ -377,13 +419,13 @@ export default function LogConfigurator() {
 
     if (leftLen < 0.2 || rightLen < 0.2) { setErrorMsg("Too close to edge!"); setTimeout(() => setErrorMsg(''), 1000); return; }
 
-    const newLeft = { ...target, id: Math.random().toString(36), length: leftLen, z: target.z - (target.length/2) + (leftLen/2) - 0.05 };
-    const newRight = { ...target, id: Math.random().toString(36), length: rightLen, z: target.z + (target.length/2) - (rightLen/2) + 0.05 };
+    // Preserve the shape when cutting
+    const newLeft = { ...target, id: Math.random().toString(36), length: leftLen, z: target.z - (target.length/2) + (leftLen/2) - 0.05, shape: target.shape };
+    const newRight = { ...target, id: Math.random().toString(36), length: rightLen, z: target.z + (target.length/2) - (rightLen/2) + 0.05, shape: target.shape };
 
     const newPlanks = [...planks];
     newPlanks.splice(hitIndex, 1, newLeft, newRight);
     setPlanks(newPlanks);
-    // Explosion inherits wood color
     setExplosions(prev => [...prev, { id: Date.now(), pos: [x, 0.5, z], color: WOOD_TYPES[activeWoodType].color }]);
   };
 
@@ -435,7 +477,7 @@ export default function LogConfigurator() {
             <p className={`text-sm ${darkMode ? 'text-stone-400' : 'text-stone-500'}`}>{selectedId ? "Drag to move. Sliders resize selected." : "Define main dimensions. We mill to order."}</p>
         </div>
 
-        {/* WOOD TYPE SELECTOR (NEW) */}
+        {/* WOOD TYPE SELECTOR */}
         <div className="mb-6">
             <label className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 block flex items-center gap-2"><Palette className="w-3 h-3"/> Material Select</label>
             <div className="grid grid-cols-5 gap-2">
@@ -452,35 +494,56 @@ export default function LogConfigurator() {
                     </button>
                 ))}
             </div>
-            <div className="text-right text-xs mt-1 text-stone-400 font-mono">
-                Multiplier: x{WOOD_TYPES[activeWoodType].priceMult.toFixed(1)}
-            </div>
+        </div>
+
+        {/* SHAPE & SIZE SELECTOR (NEW) */}
+        <div className="mb-6 pb-6 border-b border-stone-200 dark:border-stone-700">
+             <label className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 block flex items-center gap-2"><Box className="w-3 h-3"/> Profile & Size</label>
+             
+             {/* Shape Toggle */}
+             <div className="flex gap-2 mb-3">
+                <button onClick={() => updatePlankShape('box')} className={`flex-1 py-2 flex items-center justify-center gap-2 rounded-lg text-xs font-bold border-2 transition-all ${(!activeDims.shape || activeDims.shape === 'box') ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-transparent bg-stone-100 text-stone-500 dark:bg-stone-800'}`}>
+                    <Square className="w-4 h-4" /> Plank
+                </button>
+                <button onClick={() => updatePlankShape('round')} className={`flex-1 py-2 flex items-center justify-center gap-2 rounded-lg text-xs font-bold border-2 transition-all ${activeDims.shape === 'round' ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-transparent bg-stone-100 text-stone-500 dark:bg-stone-800'}`}>
+                    <CylinderIcon className="w-4 h-4" /> Round Log
+                </button>
+             </div>
+
+             {/* Standard Presets */}
+             <div className="grid grid-cols-3 gap-2">
+                {STANDARD_SIZES.map(s => (
+                    <button 
+                        key={s.label}
+                        onClick={() => applyPreset(s)}
+                        className="py-1 px-2 rounded border border-stone-200 dark:border-stone-700 text-xs font-mono hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
+                    >
+                        {s.label}
+                    </button>
+                ))}
+                <button onClick={() => updatePlankShape('round')} className="py-1 px-2 rounded border border-dashed border-stone-300 dark:border-stone-600 text-xs font-mono text-stone-400 hover:text-orange-500 transition-colors">
+                    Custom...
+                </button>
+             </div>
         </div>
 
         {/* CONTROLS SCROLL AREA */}
         <div className="flex-1 overflow-y-auto pr-2 space-y-6 custom-scrollbar">
-            <div className={`flex p-1 rounded-lg ${darkMode ? 'bg-stone-800' : 'bg-stone-100'}`}>
-                <button onClick={() => setInputMode('sliders')} className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-md text-sm font-bold transition-all ${inputMode === 'sliders' ? (darkMode ? 'bg-stone-700 text-white' : 'bg-white text-stone-900 shadow-sm') : 'text-stone-400'}`}><Sliders className="w-4 h-4" /> Standard</button>
-                <button onClick={() => setInputMode('manual')} className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-md text-sm font-bold transition-all ${inputMode === 'manual' ? (darkMode ? 'bg-stone-700 text-white' : 'bg-white text-stone-900 shadow-sm') : 'text-stone-400'}`}><Calculator className="w-4 h-4" /> Manual</button>
-            </div>
-
+            
             {/* INPUTS */}
             <div className={`space-y-6 pb-6 border-b ${darkMode ? 'border-stone-700' : 'border-stone-100'}`}>
                 <div className="space-y-2">
                     <div className="flex justify-between items-center"><label className="text-sm font-bold flex items-center gap-2"><Ruler className="w-4 h-4"/> Length</label><span className={`font-mono text-sm px-2 rounded ${darkMode?'bg-stone-800':'bg-stone-100'}`}>{(activeDims.length * 2).toFixed(1)}ft</span></div>
-                    {inputMode === 'sliders' ? <input type="range" min="1.5" max="10.0" step="0.1" value={(activeDims.length*2)} onChange={(e) => handleDimChange('length', e.target.value)} className="w-full accent-orange-600 h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer" />
-                    : <input type="number" min="1.0" step="0.1" value={(activeDims.length * 2).toFixed(1)} onChange={(e) => handleDimChange('length', e.target.value)} className={`w-full p-2 border rounded-lg font-mono focus:outline-none ${darkMode?'bg-stone-800 border-stone-700':'border-stone-200'}`} />}
+                    <input type="range" min="1.5" max="10.0" step="0.1" value={(activeDims.length*2)} onChange={(e) => handleDimChange('length', e.target.value)} className="w-full accent-orange-600 h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer" />
                 </div>
                 
                 <div className="space-y-2">
-                    <div className="flex justify-between items-center"><label className="text-sm font-bold flex items-center gap-2"><Ruler className="w-4 h-4 rotate-90"/> Width</label><span className={`font-mono text-sm px-2 rounded ${darkMode?'bg-stone-800':'bg-stone-100'}`}>{(activeDims.width * 12).toFixed(0)}in</span></div>
-                    {inputMode === 'sliders' ? <input type="range" min="1" max="40" step="1" value={(activeDims.width*12)} onChange={(e) => handleDimChange('width', e.target.value)} className="w-full accent-orange-600 h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer" />
-                    : <input type="number" min="1.0" step="0.1" value={(activeDims.width * 12).toFixed(0)} onChange={(e) => handleDimChange('width', e.target.value)} className={`w-full p-2 border rounded-lg font-mono focus:outline-none ${darkMode?'bg-stone-800 border-stone-700':'border-stone-200'}`} />}
+                    <div className="flex justify-between items-center"><label className="text-sm font-bold flex items-center gap-2"><Ruler className="w-4 h-4 rotate-90"/> Width / Dia</label><span className={`font-mono text-sm px-2 rounded ${darkMode?'bg-stone-800':'bg-stone-100'}`}>{(activeDims.width * 12).toFixed(0)}in</span></div>
+                    <input type="range" min="1" max="40" step="1" value={(activeDims.width*12)} onChange={(e) => handleDimChange('width', e.target.value)} className="w-full accent-orange-600 h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer" />
                 </div>
                 <div className="space-y-2">
                     <div className="flex justify-between items-center"><label className="text-sm font-bold flex items-center gap-2"><Box className="w-4 h-4"/> Thickness</label><span className={`font-mono text-sm px-2 rounded ${darkMode?'bg-stone-800':'bg-stone-100'}`}>{(activeDims.thickness * 10).toFixed(1)}in</span></div>
-                    {inputMode === 'sliders' ? <input type="range" min="0.5" max="5.0" step="0.1" value={(activeDims.thickness*10)} onChange={(e) => handleDimChange('thickness', e.target.value)} className="w-full accent-orange-600 h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer" />
-                    : <input type="number" min="1.0" step="0.1" value={(activeDims.thickness * 10).toFixed(1)} onChange={(e) => handleDimChange('thickness', e.target.value)} className={`w-full p-2 border rounded-lg font-mono focus:outline-none ${darkMode?'bg-stone-800 border-stone-700':'border-stone-200'}`} />}
+                    <input type="range" min="0.5" max="5.0" step="0.1" value={(activeDims.thickness*10)} onChange={(e) => handleDimChange('thickness', e.target.value)} className="w-full accent-orange-600 h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer" />
                 </div>
             </div>
 
@@ -491,7 +554,7 @@ export default function LogConfigurator() {
                     <button onClick={() => { setSawActive(!sawActive); setSelectedId(null); setPhysicsEnabled(false); }} className={`text-xs font-bold px-3 py-1 rounded-full border ${sawActive ? 'bg-orange-600 text-white' : (darkMode ? 'bg-stone-700 text-white' : 'bg-white text-stone-500')}`}>{sawActive ? 'STOP' : 'START'}</button>
                 </div>
                 {selectedId && <button onClick={deleteSelected} className="w-full py-3 rounded-xl border-2 border-red-900/30 text-red-500 font-bold bg-red-900/10 hover:bg-red-900/20 flex items-center justify-center gap-2 transition-all"><Trash2 className="w-4 h-4"/> Delete Piece</button>}
-                <button onClick={() => { setMasterDims({ width: 1.5, length: 7.0, thickness: 0.2 }); setPlanks([{ id: 'master', width: 1.5, length: 7.0, thickness: 0.2, x: 0, z: 0 }]); setExplosions([]); setSelectedId(null); }} className={`w-full py-3 rounded-xl border-2 font-bold flex items-center justify-center gap-2 transition-all ${darkMode ? 'border-stone-700 text-stone-400 hover:bg-stone-800' : 'border-stone-200 text-stone-600 hover:bg-stone-100'}`}><RefreshCw className="w-4 h-4"/> Reset All</button>
+                <button onClick={() => { setMasterDims({ width: 1.5, length: 7.0, thickness: 0.2 }); setPlanks([{ id: 'master', width: 1.5, length: 7.0, thickness: 0.2, x: 0, z: 0, shape: 'box' }]); setExplosions([]); setSelectedId(null); }} className={`w-full py-3 rounded-xl border-2 font-bold flex items-center justify-center gap-2 transition-all ${darkMode ? 'border-stone-700 text-stone-400 hover:bg-stone-800' : 'border-stone-200 text-stone-600 hover:bg-stone-100'}`}><RefreshCw className="w-4 h-4"/> Reset All</button>
             </div>
 
             {/* CUT LIST TABLE */}
@@ -509,9 +572,10 @@ export default function LogConfigurator() {
                     {planks.map((p, i) => {
                         const vol = calculateBoardFeet(p.length*2, p.width*12, p.thickness*10).toFixed(1);
                         return (
-                            <div key={p.id} onClick={() => setSelectedId(p.id)} className={`grid grid-cols-3 gap-2 p-2 rounded text-xs cursor-pointer items-center border transition-all ${selectedId === p.id ? 'bg-orange-600 text-white border-orange-600' : (darkMode ? 'bg-stone-900 border-stone-700 hover:border-stone-500' : 'bg-white border-stone-200 hover:border-orange-300')}`}>
+                            <div key={p.id} onClick={() => setSelectedId(p.id)} className={`grid grid-cols-4 gap-2 p-2 rounded text-xs cursor-pointer items-center border transition-all ${selectedId === p.id ? 'bg-orange-600 text-white border-orange-600' : (darkMode ? 'bg-stone-900 border-stone-700 hover:border-stone-500' : 'bg-white border-stone-200 hover:border-orange-300')}`}>
                                 <span className="font-bold flex items-center gap-1 col-span-1">{selectedId === p.id && <MousePointer2 className="w-3 h-3"/>} #{i+1}</span>
-                                <span className="font-mono text-center col-span-1">{(p.length*2).toFixed(1)}&apos; x {(p.width*12).toFixed(0)}&quot;</span>
+                                <span className="col-span-1 opacity-70 italic">{p.shape === 'round' ? 'Log' : 'Plank'}</span>
+                                <span className="font-mono text-center col-span-1">{(p.length*2).toFixed(1)}&apos;</span>
                                 <span className="text-right opacity-70 col-span-1">{vol} BF</span>
                             </div>
                         );
