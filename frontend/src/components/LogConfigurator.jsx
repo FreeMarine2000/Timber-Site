@@ -3,10 +3,10 @@
 
 import { useRef, useState, useMemo, Suspense, useEffect } from 'react';
 import { Canvas, useFrame, useLoader } from '@react-three/fiber';
-import { OrbitControls, Center, Grid, RoundedBox, Cylinder, Html, Text, Outlines } from '@react-three/drei';
-import { Physics, useBox, useCylinder, usePlane } from '@react-three/cannon';
+import { OrbitControls, Center, Grid, Html, Outlines, Text } from '@react-three/drei';
+import { Physics, useBox, usePlane, useCylinder } from '@react-three/cannon';
 import * as THREE from 'three';
-import { Truck, Ruler, RefreshCw, Calculator, Sliders, Navigation, AlertTriangle, Layers, Trash2, MousePointer2, Download, Box, Table2, TreePine, Palette, Cylinder as CylinderIcon, Square } from 'lucide-react';
+import { Truck, Ruler, RefreshCw, Calculator, Sliders, Navigation, AlertTriangle, Layers, Trash2, MousePointer2, Download, Box, Table2, TreePine, Palette, RotateCw, Scissors, Cylinder as CylinderIcon, Square } from 'lucide-react';
 import { useTheme } from '@/components/Providers';
 
 // --- CONFIGURATION ---
@@ -26,23 +26,68 @@ const STANDARD_SIZES = [
   { label: '1x12', w: 11.25, t: 0.75 },
 ];
 
-// --- UTILS ---
-const calculateBoardFeet = (l_ft, w_in, t_in) => (l_ft * w_in * t_in) / 12;
+// --- GEOMETRY UTILS ---
+const getCentroid = (points) => {
+    let cx = 0, cy = 0;
+    points.forEach(p => { cx += p.x; cy += p.y; });
+    return { x: cx / points.length, y: cy / points.length };
+};
 
-// --- 1. PROCEDURAL TRUCK ---
-function IndianTruck({ children, physicsEnabled }) {
-  const TruckBedCollider = () => {
-    useBox(() => ({ args: [2.4, 0.2, 6], position: [0, 1.6, -1.5], type: 'Static' }));
-    useBox(() => ({ args: [0.1, 1, 6], position: [1.15, 2.1, -1.5], type: 'Static' })); 
-    useBox(() => ({ args: [0.1, 1, 6], position: [-1.15, 2.1, -1.5], type: 'Static' })); 
-    useBox(() => ({ args: [2.4, 1, 0.1], position: [0, 2.1, -4.5], type: 'Static' })); 
+const getIntersectionLineInfinite = (line1, line2, seg1, seg2) => {
+    const x1 = line1.x, y1 = line1.y, x2 = line2.x, y2 = line2.y;
+    const x3 = seg1.x, y3 = seg1.y, x4 = seg2.x, y4 = seg2.y;
+    const denom = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
+    if (denom == 0) return null;
+    const ua = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / denom;
+    const ub = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / denom;
+    if (ub >= 0 && ub <= 1) return { x: x1 + ua * (x2 - x1), y: y1 + ua * (y2 - y1) };
     return null;
-  };
+};
+
+const isLeft = (a, b, c) => ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)) > 0;
+
+const slicePolygon = (points, l1, l2) => {
+    const poly1 = [];
+    const poly2 = [];
+    for (let i = 0; i < points.length; i++) {
+        const curr = points[i];
+        const next = points[(i + 1) % points.length];
+        const intersection = getIntersectionLineInfinite(l1, l2, curr, next);
+        if (isLeft(l1, l2, curr)) poly1.push(curr); else poly2.push(curr);
+        if (intersection) {
+            poly1.push(intersection);
+            poly2.push(intersection);
+        }
+    }
+    if (poly1.length < 3 || poly2.length < 3) return null;
+    return [poly1, poly2];
+};
+
+const getBounds = (points) => {
+    let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity;
+    points.forEach(p => {
+        if(p.x < minX) minX = p.x;
+        if(p.x > maxX) maxX = p.x;
+        if(p.y < minY) minY = p.y;
+        if(p.y > maxY) maxY = p.y;
+    });
+    return { w: maxX-minX, d: maxY-minY, minX, maxX, minY, maxY };
+};
+
+const calculateBoardFeet = (lengthFt, widthIn, thickIn) => {
+    return (lengthFt * widthIn * thickIn) / 12;
+};
+
+// --- COMPONENTS ---
+
+function IndianTruck({ children, physicsEnabled }) {
+  useBox(() => ({ args: [2.4, 0.2, 6], position: [0, 1.6, -1.5], type: 'Static' }));
+  useBox(() => ({ args: [0.1, 1, 6], position: [1.15, 2.1, -1.5], type: 'Static' })); 
+  useBox(() => ({ args: [0.1, 1, 6], position: [-1.15, 2.1, -1.5], type: 'Static' })); 
+  useBox(() => ({ args: [2.4, 1, 0.1], position: [0, 2.1, -4.5], type: 'Static' })); 
 
   return (
-    <group>
-      {physicsEnabled && <TruckBedCollider />}
-      <group position={[0, -1.5, 0]} scale={0.8}>
+    <group position={[0, -1.5, 0]} scale={0.8}>
         <mesh position={[0, 0.5, 0]}><boxGeometry args={[2.5, 0.5, 8]} /><meshStandardMaterial color="#1a1a1a" /></mesh>
         <Wheel position={[-1.3, 0.5, 2.5]} /><Wheel position={[1.3, 0.5, 2.5]} />
         <Wheel position={[-1.3, 0.5, -2]} /><Wheel position={[1.3, 0.5, -2]} />
@@ -59,7 +104,6 @@ function IndianTruck({ children, physicsEnabled }) {
             </group>
         </group>
         <group position={[0, 2, -1.5]}>{children}</group>
-      </group>
     </group>
   );
 }
@@ -73,38 +117,31 @@ function Wheel({ position }) {
   );
 }
 
-// --- 2. PHYSICS FLOOR ---
 function Floor() {
   const [ref] = usePlane(() => ({ rotation: [-Math.PI / 2, 0, 0], position: [0, -2, 0] }));
   return <mesh ref={ref} receiveShadow><shadowMaterial opacity={0.2} /></mesh>;
 }
 
-// --- 3. RC DRIVING SAW ---
-function RCDrivingSaw({ active, onUpdatePos, onClickToCut }) {
+function RCDrivingSaw({ active, onUpdatePos, sawRotation, onClickToCut }) {
   const sawRef = useRef();
   const bladeRef = useRef();
   const mousePlane = useRef(null);
   const targetPos = useRef(new THREE.Vector3(0, 1, 0));
   
-  useEffect(() => {
-    mousePlane.current = new THREE.Plane(new THREE.Vector3(0, 1, 0), -1.0);
-  }, []);
+  useEffect(() => { mousePlane.current = new THREE.Plane(new THREE.Vector3(0, 1, 0), -1.0); }, []);
 
   useFrame((state, delta) => {
     if (!active || !sawRef.current || !mousePlane.current) return;
     state.raycaster.ray.intersectPlane(mousePlane.current, targetPos.current);
-    
     const currentPos = sawRef.current.position;
     currentPos.x = THREE.MathUtils.lerp(currentPos.x, targetPos.current.x, delta * 5);
     currentPos.z = THREE.MathUtils.lerp(currentPos.z, targetPos.current.z, delta * 5);
-
     const dx = targetPos.current.x - currentPos.x;
     const dz = targetPos.current.z - currentPos.z;
     if (Math.abs(dx) > 0.01 || Math.abs(dz) > 0.01) {
         sawRef.current.rotation.y = THREE.MathUtils.lerp(sawRef.current.rotation.y, Math.atan2(dx, dz), delta * 10);
     }
     if (bladeRef.current) bladeRef.current.rotation.y -= delta * 30;
-    
     onUpdatePos({ x: currentPos.x, z: currentPos.z });
   });
 
@@ -118,21 +155,21 @@ function RCDrivingSaw({ active, onUpdatePos, onClickToCut }) {
       {active && (
         <group ref={sawRef} position={[0, 1, 0]}>
             <mesh position={[0, 0.3, 0]} castShadow><boxGeometry args={[0.3, 0.4, 0.6]} /><meshStandardMaterial color="#222" /></mesh>
-            <mesh position={[0, 0.6, -0.2]} rotation={[-Math.PI/4, 0, 0]}><capsuleGeometry args={[0.05, 0.4]} /><meshStandardMaterial color="#ff6600" /></mesh>
-            <mesh ref={bladeRef} position={[0, 0, 0]} rotation={[0, 0, Math.PI/2]}>
-                <cylinderGeometry args={[0.5, 0.5, 0.02, 32]} /><meshStandardMaterial color="#ccc" metalness={0.8} roughness={0.2} />
-                <mesh><cylinderGeometry args={[0.52, 0.52, 0.02, 24]} /><meshStandardMaterial color="#555" wireframe /></mesh>
-            </mesh>
-            <Html position={[0, 1, 0]} center>
-                <div className="bg-black/80 text-white text-[10px] font-bold px-2 py-1 rounded shadow-lg whitespace-nowrap pointer-events-none">CLICK TO CUT</div>
-            </Html>
+            <group rotation={[0, sawRotation, 0]}> 
+                <mesh position={[0, 0.6, -0.2]} rotation={[-Math.PI/4, 0, 0]}><capsuleGeometry args={[0.05, 0.4]} /><meshStandardMaterial color="#ff6600" /></mesh>
+                <mesh ref={bladeRef} position={[0, 0, 0]} rotation={[0, 0, Math.PI/2]}>
+                    <cylinderGeometry args={[0.5, 0.5, 0.02, 32]} /><meshStandardMaterial color="#ccc" metalness={0.8} roughness={0.2} />
+                    <mesh><cylinderGeometry args={[0.52, 0.52, 0.02, 24]} /><meshStandardMaterial color="#555" wireframe /></mesh>
+                </mesh>
+                <mesh rotation={[Math.PI/2, 0, 0]} position={[0, -0.9, 0]}><planeGeometry args={[0.02, 3]} /><meshBasicMaterial color="red" opacity={0.5} transparent /></mesh>
+            </group>
+            <Html position={[0, 1, 0]} center><div className="bg-black/80 text-white text-[10px] font-bold px-2 py-1 rounded shadow-lg whitespace-nowrap pointer-events-none">CLICK TO CUT</div></Html>
         </group>
       )}
     </>
   );
 }
 
-// --- 4. PARTICLE SYSTEM ---
 function WoodExplosion({ position, color }) {
   const count = 30;
   const meshRef = useRef();
@@ -149,7 +186,7 @@ function WoodExplosion({ position, color }) {
   }, [position]);
 
   useFrame((state, delta) => {
-    if (!meshRef.current || particles.current.length === 0) return;
+    if (!meshRef.current) return;
     particles.current.forEach((p, i) => {
       if (p.life > 0) {
           p.vel.y -= delta * 10;
@@ -178,44 +215,71 @@ function WoodExplosion({ position, color }) {
   );
 }
 
-// --- 5. PLANK COMPONENT (SHAPE AWARE) ---
-function Plank({ data, isSelected, onSelect, onUpdate, sawActive, physicsMode, woodTypeKey }) {
+// --- 3D LABELS COMPONENT (Reusable) ---
+const DimensionLabels = ({ isSelected, w, d, thickness, isLog }) => {
+    if (!isSelected) return null;
+    return (
+        <group position={[0, thickness + (isLog ? 0.6 : 0.2), 0]}>
+            <Text 
+                position={[0, 0, -d/2 - 0.2]} 
+                rotation={[-Math.PI/2, 0, 0]} 
+                fontSize={0.3} color="white" anchorX="center" anchorY="middle" outlineWidth={0.02} outlineColor="black"
+            >
+                {(d * 2).toFixed(1)}&apos;
+            </Text>
+            <Text 
+                position={[w/2 + 0.2, 0, 0]} 
+                rotation={[-Math.PI/2, 0, -Math.PI/2]} 
+                fontSize={0.3} color="white" anchorX="center" anchorY="middle" outlineWidth={0.02} outlineColor="black"
+            >
+                {(isLog ? thickness * 10 : w * 12).toFixed(1)}&quot;
+            </Text>
+        </group>
+    );
+};
+
+// --- HYBRID PLANK COMPONENT ---
+function HybridPlank({ data, isSelected, onSelect, onDragStart, onDragEnd, sawActive, physicsMode, woodTypeKey }) {
   const meshRef = useRef();
   const woodInfo = WOOD_TYPES[woodTypeKey] || WOOD_TYPES.oak;
-  const isRound = data.shape === 'round';
+  const isLog = data.type === 'log';
 
-  // TEXTURE LOADING
+  const shape = useMemo(() => {
+      const s = new THREE.Shape();
+      if (data.points && data.points.length > 0) {
+          s.moveTo(data.points[0].x, data.points[0].y);
+          for (let i = 1; i < data.points.length; i++) {
+              s.lineTo(data.points[i].x, data.points[i].y);
+          }
+          s.closePath();
+      }
+      return s;
+  }, [data.points]);
+
   const baseTexture = useLoader(THREE.TextureLoader, '/wood_texture.jpg');
   const texture = useMemo(() => {
     if(!baseTexture) return null;
     const t = baseTexture.clone();
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.rotation = Math.PI / 2; 
-    t.center.set(0.5, 0.5); 
-    t.colorSpace = THREE.SRGBColorSpace; 
-    t.repeat.set(data.length * 0.5, data.width * 0.5);
+    t.repeat.set(0.5, 0.5);
     return t;
-  }, [baseTexture, data.length, data.width]);
+  }, [baseTexture]);
 
-  // PHYSICS: CONDITIONAL HOOKS
-  // We must define both, but use the Ref based on shape
+  const bounds = useMemo(() => getBounds(data.points), [data.points]);
+
   const [boxRef] = useBox(() => ({
-    mass: 5, 
-    position: [data.x, 2, data.z], 
-    args: [data.width, data.length, data.thickness],
-    type: 'Dynamic'
+    mass: 5, position: [data.x, 2, data.z], args: [bounds.w, data.thickness, bounds.d], type: 'Dynamic'
   }), useRef(null));
 
   const [cylRef] = useCylinder(() => ({
-    mass: 5,
-    position: [data.x, 2, data.z],
-    args: [data.width/2, data.width/2, data.length, 16], // Radius Top, Radius Bottom, Height
-    rotation: [Math.PI / 2, 0, 0], // Rotate to lay flat
+    mass: 5, 
+    position: [data.x, 2, data.z], 
+    args: [data.thickness/2, data.thickness/2, bounds.d, 16],
+    rotation: [Math.PI/2, 0, 0],
     type: 'Dynamic'
   }), useRef(null));
 
-  // Determine which ref to use for Rendering
-  const activeRef = physicsMode ? (isRound ? cylRef : boxRef) : meshRef;
+  const physRef = isLog ? cylRef : boxRef;
 
   const dragging = useRef(false);
   const mousePlane = useRef(null);
@@ -239,64 +303,62 @@ function Plank({ data, isSelected, onSelect, onUpdate, sawActive, physicsMode, w
     />
   );
 
-  // LOGIC: If Physics is ON, we return the physics-enabled mesh wrapper.
-  // If Physics is OFF, we return the manual control wrapper.
-  
-  const Geometry = isRound ? (
-    <Cylinder args={[data.width/2, data.width/2, data.length, 24]} rotation={[Math.PI/2, 0, 0]} castShadow receiveShadow>
-        {Material}
-        {isSelected && <Outlines thickness={0.05} color="orange" />}
-    </Cylinder>
-  ) : (
-    <RoundedBox args={[1, 1, 1]} scale={[data.width, data.length, data.thickness]} radius={0.02} smoothness={4} rotation={[Math.PI/2, 0, 0]} castShadow receiveShadow>
-        {Material}
-        {isSelected && <Outlines thickness={0.05} color="orange" />}
-    </RoundedBox>
-  );
-
-  // 3D LABELS
-  const Labels = isSelected && (
-    <group position={[physicsMode ? 0 : data.x, (physicsMode ? 0 : data.thickness) + 0.2, physicsMode ? 0 : data.z]}>
-       <Text position={[0, 0, -data.length/2 - 0.2]} rotation={[-Math.PI/2, 0, 0]} fontSize={0.25} color="black" anchorX="center" anchorY="middle">
-          {(data.length * 2).toFixed(1)}&apos;
-       </Text>
-       <Text position={[data.width/2 + 0.2, 0, 0]} rotation={[-Math.PI/2, 0, -Math.PI/2]} fontSize={0.25} color="black" anchorX="center" anchorY="middle">
-          {(data.width * 12).toFixed(0)}&quot; {isRound ? 'Ø' : ''}
-       </Text>
-    </group>
-  );
+  const extrudeSettings = { depth: data.thickness, bevelEnabled: true, bevelSegments: 2, steps: 1, bevelSize: 0.01, bevelThickness: 0.01 };
 
   if (physicsMode) {
       return (
-        <group ref={isRound ? cylRef : boxRef}>
-            {isRound ? (
-                <Cylinder args={[data.width/2, data.width/2, data.length, 24]} rotation={[Math.PI/2, 0, 0]} castShadow receiveShadow>{Material}</Cylinder>
+        <group ref={physRef}>
+            {isLog ? (
+                <mesh rotation={[Math.PI/2, 0, 0]}>
+                    <cylinderGeometry args={[data.thickness/2, data.thickness/2, bounds.d, 32]} />
+                    {Material}
+                </mesh>
             ) : (
-                <RoundedBox args={[1, 1, 1]} scale={[data.width, data.length, data.thickness]} radius={0.02} smoothness={4} rotation={[Math.PI/2, 0, 0]} castShadow receiveShadow>{Material}</RoundedBox>
+                <mesh rotation={[Math.PI/2, 0, 0]} position={[0, -data.thickness/2, 0]}>
+                    <extrudeGeometry args={[shape, extrudeSettings]} />
+                    {Material}
+                </mesh>
             )}
+            <DimensionLabels isSelected={isSelected} w={bounds.w} d={bounds.d} thickness={data.thickness} isLog={isLog} />
         </group>
       );
   }
 
   return (
-    <group>
-        <group 
-            ref={meshRef}
-            position={[data.x, 0, data.z]}
-            onPointerDown={(e) => {
-                if (sawActive) return;
-                e.stopPropagation();
-                onSelect(data.id);
-                dragging.current = true;
-                document.body.style.cursor = 'grabbing';
-            }}
-            onPointerUp={() => { dragging.current = false; document.body.style.cursor = 'auto'; }}
-            onPointerOver={() => !sawActive && (document.body.style.cursor = 'grab')}
-            onPointerOut={() => (document.body.style.cursor = 'auto')}
-        >
-            {Geometry}
-        </group>
-        {Labels}
+    <group 
+        ref={meshRef}
+        position={[data.x, 0, data.z]}
+        onPointerDown={(e) => {
+            if (sawActive) return;
+            e.stopPropagation(); 
+            onSelect(data.id);
+            onDragStart(); 
+            dragging.current = true;
+            document.body.style.cursor = 'grabbing';
+        }}
+        onPointerUp={(e) => {
+            e.stopPropagation();
+            dragging.current = false;
+            onDragEnd(); 
+            document.body.style.cursor = 'auto';
+        }}
+        onPointerOver={() => !sawActive && (document.body.style.cursor = 'grab')}
+        onPointerOut={() => (document.body.style.cursor = 'auto')}
+    >
+        {isLog ? (
+             <mesh rotation={[Math.PI/2, 0, 0]} castShadow receiveShadow>
+                <cylinderGeometry args={[data.thickness/2, data.thickness/2, bounds.d, 32]} />
+                {Material}
+                {isSelected && <Outlines thickness={0.05} color="orange" />}
+             </mesh>
+        ) : (
+            <mesh rotation={[Math.PI/2, 0, 0]} position={[0, 0, 0]} castShadow receiveShadow>
+                <extrudeGeometry args={[shape, extrudeSettings]} />
+                {Material}
+                {isSelected && <Outlines thickness={0.05} color="orange" />}
+            </mesh>
+        )}
+        <DimensionLabels isSelected={isSelected} w={bounds.w} d={bounds.d} thickness={data.thickness} isLog={isLog} />
     </group>
   );
 }
@@ -308,88 +370,86 @@ function LoadingFallback() {
 // --- MAIN COMPONENT ---
 export default function LogConfigurator() {
   const [viewMode, setViewMode] = useState('studio'); 
-  const [inputMode, setInputMode] = useState('sliders'); 
-  const [masterDims, setMasterDims] = useState({ width: 1.5, length: 7.0, thickness: 0.2 });
   const [physicsEnabled, setPhysicsEnabled] = useState(false);
   const [activeWoodType, setActiveWoodType] = useState('walnut');
+  const [isDragging, setIsDragging] = useState(false);
   
-  const [planks, setPlanks] = useState([{ id: 'master', width: 1.5, length: 7.0, thickness: 0.2, x: 0, z: 0, shape: 'box' }]);
+  const initialPoints = [{x: -1, y: -2}, {x: 1, y: -2}, {x: 1, y: 2}, {x: -1, y: 2}];
+  const [planks, setPlanks] = useState([{ id: 'master', points: initialPoints, thickness: 0.2, x: 0, z: 0, type: 'plank' }]);
   const [selectedId, setSelectedId] = useState(null);
   
   const [sawActive, setSawActive] = useState(false);
   const [sawPos, setSawPos] = useState({ x: 0, z: 0 });
+  const [sawRotation, setSawRotation] = useState(0); 
   const [explosions, setExplosions] = useState([]);
   const [errorMsg, setErrorMsg] = useState('');
 
   const { darkMode } = useTheme();
-
   const woodPriceMult = WOOD_TYPES[activeWoodType].priceMult;
-  const totalVolume = planks.reduce((acc, p) => acc + (p.width * p.length * p.thickness), 0);
-  const totalBF = planks.reduce((acc, p) => acc + calculateBoardFeet(p.length*2, p.width*12, p.thickness*10), 0);
-  const basePrice = totalVolume * 300;
-  const finalPrice = Math.floor(basePrice * woodPriceMult);
+  const totalVolume = planks.reduce((acc, p) => acc + (2 * p.thickness), 0); 
+  const price = Math.floor(totalVolume * 200 * woodPriceMult);
 
-  const activePlank = selectedId ? planks.find(p => p.id === selectedId) : planks[0]; // Default to first if none selected, or master logic
-  const activeDims = activePlank || masterDims;
+  const activePlank = selectedId ? planks.find(p => p.id === selectedId) : planks[0];
 
-  const updatePlankShape = (newShape) => {
-    if (selectedId) {
-        setPlanks(prev => prev.map(p => p.id === selectedId ? { ...p, shape: newShape } : p));
-    } else {
-        // Update master (which is index 0 usually in this simplistic logic, or just add a flag for future creations)
-        setPlanks(prev => prev.map((p, i) => i === 0 ? { ...p, shape: newShape } : p));
-    }
+  const setProfile = (type) => {
+    const targetId = selectedId || (planks.length > 0 ? planks[0].id : null);
+    if(!targetId) return;
+
+    setPlanks(prev => prev.map(p => {
+        if (p.id !== targetId) return p;
+        const newPoints = [{x: -1, y: -2}, {x: 1, y: -2}, {x: 1, y: 2}, {x: -1, y: 2}]; 
+        const newThick = type === 'log' ? 1.0 : 0.2; 
+        return { ...p, points: newPoints, thickness: newThick, type: type };
+    }));
   };
 
   const applyPreset = (preset) => {
-    // preset: { w: in, t: in }
-    const widthMeters = preset.w / 12;
-    const thicknessMeters = preset.t / 10; // Keeping scaling consistent with previous code
-    
-    if (selectedId) {
-        setPlanks(prev => prev.map(p => p.id === selectedId ? { ...p, width: widthMeters, thickness: thicknessMeters, shape: 'box' } : p));
-    } else {
-        setPlanks(prev => prev.map((p, i) => i === 0 ? { ...p, width: widthMeters, thickness: thicknessMeters, shape: 'box' } : p));
-        setMasterDims(prev => ({ ...prev, width: widthMeters, thickness: thicknessMeters }));
-    }
+      const targetId = selectedId || (planks.length > 0 ? planks[0].id : null);
+      if(!targetId) return;
+
+      setPlanks(prev => prev.map(p => {
+          if(p.id !== targetId) return p;
+          const newThickness = preset.t / 10;
+          const newWidth = preset.w / 12;
+          const bounds = getBounds(p.points);
+          const currentLength = bounds.d || 4.0; 
+          const halfW = newWidth / 2;
+          const halfL = currentLength / 2;
+          const newPoints = [{x: -halfW, y: -halfL}, {x: halfW, y: -halfL}, {x: halfW, y: halfL}, {x: -halfW, y: halfL}];
+          return { ...p, thickness: newThickness, points: newPoints, type: 'plank' };
+      }));
   };
 
-  const handleDimChange = (key, value) => {
-      const val = parseFloat(value);
-      if (selectedId) {
-          setPlanks(prev => prev.map(p => {
-              if (p.id === selectedId) {
-                  let newVal = val;
-                  if (key === 'length') newVal = val / 2;
-                  if (key === 'width') newVal = val / 12;
-                  if (key === 'thickness') newVal = val / 10;
-                  return { ...p, [key]: newVal };
-              }
-              return p;
-          }));
-      } else {
-          let newDims = { ...masterDims };
-          if (key === 'length') newDims.length = val / 2;     
-          if (key === 'width') newDims.width = val / 12;      
-          if (key === 'thickness') newDims.thickness = val / 10;
-          setMasterDims(newDims);
-          setPlanks(prev => prev.map((p, i) => i === 0 ? { ...p, ...newDims } : p));
-      }
+  const handleDimChange = (axis, newVal) => {
+    const targetId = selectedId || (planks.length > 0 ? planks[0].id : null);
+    if(!targetId) return;
+
+    setPlanks(prev => prev.map(p => {
+        if (p.id !== targetId) return p;
+        
+        const bounds = getBounds(p.points);
+        if (axis === 'thickness') return { ...p, thickness: parseFloat(newVal) };
+        
+        let scaleX = 1, scaleY = 1;
+        if (axis === 'width') scaleX = newVal / (bounds.w || 1);
+        if (axis === 'length') scaleY = newVal / (bounds.d || 1);
+        
+        const newPoints = p.points.map(pt => ({ x: pt.x * scaleX, y: pt.y * scaleY }));
+        return { ...p, points: newPoints };
+    }));
   };
 
-  const handlePlankUpdate = (id, newPos) => setPlanks(prev => prev.map(p => p.id === id ? { ...p, ...newPos } : p));
-  const deleteSelected = () => { if (!selectedId) return; setPlanks(prev => prev.filter(p => p.id !== selectedId)); setSelectedId(null); };
-
+  // --- CSV EXPORT LOGIC ---
   const downloadCSV = () => {
-      const headers = ["ID", "Wood Type", "Shape", "Length (ft)", "Width (in)", "Thickness (in)", "Board Feet"].join(",");
+      const headers = ["ID", "Type", "Length (ft)", "Width (in)", "Thickness (in)", "Board Feet"].join(",");
       const rows = planks.map((p, i) => {
-          const l = (p.length * 2).toFixed(2);
-          const w = (p.width * 12).toFixed(2);
+          const bounds = getBounds(p.points);
+          const l = (bounds.d * 2).toFixed(2);
+          const w = (bounds.w * 12).toFixed(2);
           const t = (p.thickness * 10).toFixed(2);
           const bf = calculateBoardFeet(l, w, t).toFixed(2);
-          const typeName = WOOD_TYPES[activeWoodType].name;
-          const shapeName = p.shape === 'round' ? 'Round Log' : 'Plank';
-          return [`Piece #${i+1}`, typeName, shapeName, l, w, t, bf].join(",");
+          const typeName = p.type === 'log' ? 'Round Log' : 'Plank/Slab';
+          return [`Piece #${i+1}`, typeName, l, w, t, bf].join(",");
       });
       const csvContent = "data:text/csv;charset=utf-8," + [headers, ...rows].join("\n");
       const encodedUri = encodeURI(csvContent);
@@ -406,35 +466,56 @@ export default function LogConfigurator() {
     let hitIndex = -1;
     for (let i = 0; i < planks.length; i++) {
         const p = planks[i];
-        if (x > p.x - p.width/2 && x < p.x + p.width/2 && z > p.z - p.length/2 && z < p.z + p.length/2) {
-            hitIndex = i; break;
-        }
+        if (x > p.x - 2 && x < p.x + 2 && z > p.z - 2 && z < p.z + 2) { hitIndex = i; break; }
     }
     if (hitIndex === -1) { setErrorMsg("Missed!"); setTimeout(() => setErrorMsg(''), 1000); return; }
 
     const target = planks[hitIndex];
-    const localCutZ = z - target.z;
-    const leftLen = localCutZ - (-target.length / 2);
-    const rightLen = (target.length / 2) - localCutZ;
+    const dx = Math.sin(sawRotation);
+    const dy = Math.cos(sawRotation);
+    const localSawX = x - target.x;
+    const localSawY = z - target.z;
+    const l1 = { x: localSawX - dx * 10, y: localSawY - dy * 10 };
+    const l2 = { x: localSawX + dx * 10, y: localSawY + dy * 10 };
+    
+    const result = slicePolygon(target.points, l1, l2);
+    if (!result) { setErrorMsg("Cut failed!"); setTimeout(() => setErrorMsg(''), 1000); return; }
+    
+    const [poly1Points, poly2Points] = result;
+    const c1 = getCentroid(poly1Points);
+    const c2 = getCentroid(poly2Points);
+    const newPoints1 = poly1Points.map(p => ({ x: p.x - c1.x, y: p.y - c1.y }));
+    const newPoints2 = poly2Points.map(p => ({ x: p.x - c2.x, y: p.y - c2.y }));
 
-    if (leftLen < 0.2 || rightLen < 0.2) { setErrorMsg("Too close to edge!"); setTimeout(() => setErrorMsg(''), 1000); return; }
+    const nx = -dy, ny = dx;
+    const vec1 = { x: c1.x - localSawX, y: c1.y - localSawY };
+    const dot1 = vec1.x * nx + vec1.y * ny;
+    const dir1 = dot1 > 0 ? 1 : -1;
+    const sep = 0.4; 
+    const pushX = nx * sep * dir1, pushY = ny * sep * dir1;
 
-    // Preserve the shape when cutting
-    const newLeft = { ...target, id: Math.random().toString(36), length: leftLen, z: target.z - (target.length/2) + (leftLen/2) - 0.05, shape: target.shape };
-    const newRight = { ...target, id: Math.random().toString(36), length: rightLen, z: target.z + (target.length/2) - (rightLen/2) + 0.05, shape: target.shape };
+    const newType = target.type === 'log' ? 'custom' : target.type;
+
+    const p1 = { ...target, id: Math.random().toString(36), points: newPoints1, x: target.x + c1.x + pushX, z: target.z + c1.y + pushY, type: newType };
+    const p2 = { ...target, id: Math.random().toString(36), points: newPoints2, x: target.x + c2.x - pushX, z: target.z + c2.y - pushY, type: newType };
 
     const newPlanks = [...planks];
-    newPlanks.splice(hitIndex, 1, newLeft, newRight);
+    newPlanks.splice(hitIndex, 1, p1, p2);
     setPlanks(newPlanks);
     setExplosions(prev => [...prev, { id: Date.now(), pos: [x, 0.5, z], color: WOOD_TYPES[activeWoodType].color }]);
   };
+
+  const currentBounds = activePlank ? getBounds(activePlank.points) : { w: 2, d: 4 };
+  const currentLength = (currentBounds.d * 2) || 4; 
+  const currentWidth = (currentBounds.w * 12) || 12; 
+  const currentThick = (activePlank ? activePlank.thickness * 10 : 2); 
 
   return (
     <div className={`flex flex-col lg:flex-row h-[850px] rounded-3xl overflow-hidden shadow-2xl border transition-colors duration-500 ${darkMode ? 'bg-stone-900 border-stone-800' : 'bg-stone-100 border-stone-200'}`}>
       
       {/* LEFT: 3D VIEWPORT */}
       <div className={`relative flex-1 ${darkMode ? 'bg-stone-800' : 'bg-[#f0f0f0]'}`}>
-        <div className="absolute top-4 left-4 right-4 z-10 flex justify-between items-start pointer-events-none">
+        <div className="absolute top-4 left-4 right-4 z-10 flex justify-between pointer-events-none">
             <div className="flex gap-2 pointer-events-auto">
                 <button onClick={() => setViewMode(m => m === 'truck' ? 'studio' : 'truck')} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold shadow-md transition-all ${viewMode === 'truck' ? 'bg-orange-600 text-white' : 'bg-white text-stone-800'}`}><Truck className="w-4 h-4" /> {viewMode === 'truck' ? 'Studio' : 'Truck'}</button>
                 <button onClick={() => setPhysicsEnabled(!physicsEnabled)} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold shadow-md transition-all ${physicsEnabled ? 'bg-purple-600 text-white' : 'bg-white text-stone-800'}`}><Box className="w-4 h-4" /> {physicsEnabled ? 'Gravity ON' : 'Gravity OFF'}</button>
@@ -442,7 +523,7 @@ export default function LogConfigurator() {
         </div>
         {errorMsg && <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 bg-red-600 text-white px-4 py-2 rounded-full font-bold shadow-lg animate-bounce flex items-center gap-2"><AlertTriangle className="w-4 h-4"/> {errorMsg}</div>}
         
-        <Canvas shadows camera={{ position: [6, 8, 8], fov: 45 }} onPointerMissed={() => setSelectedId(null)}>
+        <Canvas shadows camera={{ position: [0, 10, 5], fov: 45 }} onPointerMissed={() => setSelectedId(null)}>
           <ambientLight intensity={darkMode ? 0.4 : 0.8} />
           <directionalLight position={[10, 20, 10]} intensity={1.5} castShadow />
           <pointLight position={[-10, 5, -10]} intensity={0.5} />
@@ -450,13 +531,27 @@ export default function LogConfigurator() {
             <Physics gravity={[0, -9.8, 0]} isPaused={!physicsEnabled}>
                 <Center top={viewMode === 'studio'}> 
                     <group>
-                        {!physicsEnabled && <RCDrivingSaw active={sawActive} onUpdatePos={setSawPos} onClickToCut={attemptCut} />}
+                        {!physicsEnabled && <RCDrivingSaw active={sawActive} onUpdatePos={setSawPos} sawRotation={sawRotation} onClickToCut={attemptCut} />}
                         {explosions.map(ex => <WoodExplosion key={ex.id} position={ex.pos} color={ex.color} />)}
                         <group>
                             {viewMode === 'truck' ? (
-                                <IndianTruck physicsEnabled={physicsEnabled}>{planks.map(p => <Plank key={p.id} data={p} isSelected={selectedId === p.id} onSelect={setSelectedId} onUpdate={handlePlankUpdate} sawActive={sawActive} physicsMode={physicsEnabled} woodTypeKey={activeWoodType} />)}</IndianTruck>
+                                <IndianTruck physicsEnabled={physicsEnabled}>{planks.map(p => (
+                                    <HybridPlank 
+                                        key={p.id} data={p} isSelected={selectedId === p.id} onSelect={setSelectedId} 
+                                        onUpdate={(id, pos) => setPlanks(prev => prev.map(pl => pl.id === id ? { ...pl, ...pos } : pl))}
+                                        onDragStart={() => setIsDragging(true)} onDragEnd={() => setIsDragging(false)} 
+                                        sawActive={sawActive} physicsMode={physicsEnabled} woodTypeKey={activeWoodType} 
+                                    />
+                                ))}</IndianTruck>
                             ) : (
-                                <>{physicsEnabled && <Floor />}{planks.map(p => <Plank key={p.id} data={p} isSelected={selectedId === p.id} onSelect={setSelectedId} onUpdate={handlePlankUpdate} sawActive={sawActive} physicsMode={physicsEnabled} woodTypeKey={activeWoodType} />)}</>
+                                <>{physicsEnabled && <Floor />}{planks.map(p => (
+                                    <HybridPlank 
+                                        key={p.id} data={p} isSelected={selectedId === p.id} onSelect={setSelectedId} 
+                                        onUpdate={(id, pos) => setPlanks(prev => prev.map(pl => pl.id === id ? { ...pl, ...pos } : pl))}
+                                        onDragStart={() => setIsDragging(true)} onDragEnd={() => setIsDragging(false)} 
+                                        sawActive={sawActive} physicsMode={physicsEnabled} woodTypeKey={activeWoodType} 
+                                    />
+                                ))}</>
                             )}
                         </group>
                     </group>
@@ -464,136 +559,102 @@ export default function LogConfigurator() {
             </Physics>
           </Suspense>
           <Grid position={[0, -2, 0]} args={[20, 20]} cellSize={0.5} cellThickness={0.5} cellColor={darkMode ? "#444" : "#ccc"} sectionSize={3} fadeDistance={30} infiniteGrid />
-          <OrbitControls makeDefault enabled={!sawActive} minPolarAngle={0} maxPolarAngle={Math.PI / 2.1} target={[0, 0, 0]} />
+          <OrbitControls makeDefault enabled={!sawActive && !isDragging} minPolarAngle={0} maxPolarAngle={Math.PI / 2.1} target={[0, 0, 0]} />
         </Canvas>
       </div>
 
-      {/* RIGHT: CONTROLS */}
-      <div className={`w-full lg:w-96 p-6 flex flex-col border-l overflow-hidden ${darkMode ? 'bg-stone-900 border-stone-800 text-white' : 'bg-white border-stone-200'}`}>
+      {/* RIGHT: CONTROLS (SCROLLABLE WRAPPER) */}
+      <div className={`w-full lg:w-96 flex flex-col border-l overflow-hidden ${darkMode ? 'bg-stone-900 border-stone-800 text-white' : 'bg-white border-stone-200'}`}>
         
-        {/* HEADER */}
-        <div className="mb-6 flex-shrink-0">
+        {/* Fixed Header */}
+        <div className="p-6 border-b flex-shrink-0">
             <h3 className="text-2xl font-serif mb-1">{selectedId ? "Edit Piece" : "Master Log"}</h3>
-            <p className={`text-sm ${darkMode ? 'text-stone-400' : 'text-stone-500'}`}>{selectedId ? "Drag to move. Sliders resize selected." : "Define main dimensions. We mill to order."}</p>
+            <p className={`text-sm ${darkMode ? 'text-stone-400' : 'text-stone-500'}`}>{selectedId ? "Drag to move. Drive saw to cut." : "Define main dimensions. We mill to order."}</p>
         </div>
 
-        {/* WOOD TYPE SELECTOR */}
-        <div className="mb-6">
-            <label className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 block flex items-center gap-2"><Palette className="w-3 h-3"/> Material Select</label>
-            <div className="grid grid-cols-5 gap-2">
-                {Object.entries(WOOD_TYPES).map(([key, info]) => (
-                    <button 
-                        key={key} 
-                        onClick={() => setActiveWoodType(key)}
-                        className={`aspect-square rounded-lg border-2 transition-all relative group ${activeWoodType === key ? 'border-orange-500 scale-110 shadow-md' : 'border-transparent hover:scale-105'}`}
-                        style={{ backgroundColor: info.color }}
-                        title={info.name}
-                    >
-                        {activeWoodType === key && <div className="absolute inset-0 flex items-center justify-center text-white/50"><TreePine className="w-4 h-4" /></div>}
-                        <span className="absolute -bottom-6 left-1/2 -translate-x-1/2 bg-black text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap z-20 pointer-events-none">{info.name}</span>
-                    </button>
-                ))}
-            </div>
-        </div>
-
-        {/* SHAPE & SIZE SELECTOR (NEW) */}
-        <div className="mb-6 pb-6 border-b border-stone-200 dark:border-stone-700">
-             <label className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 block flex items-center gap-2"><Box className="w-3 h-3"/> Profile & Size</label>
-             
-             {/* Shape Toggle */}
-             <div className="flex gap-2 mb-3">
-                <button onClick={() => updatePlankShape('box')} className={`flex-1 py-2 flex items-center justify-center gap-2 rounded-lg text-xs font-bold border-2 transition-all ${(!activeDims.shape || activeDims.shape === 'box') ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-transparent bg-stone-100 text-stone-500 dark:bg-stone-800'}`}>
-                    <Square className="w-4 h-4" /> Plank
-                </button>
-                <button onClick={() => updatePlankShape('round')} className={`flex-1 py-2 flex items-center justify-center gap-2 rounded-lg text-xs font-bold border-2 transition-all ${activeDims.shape === 'round' ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-transparent bg-stone-100 text-stone-500 dark:bg-stone-800'}`}>
-                    <CylinderIcon className="w-4 h-4" /> Round Log
-                </button>
-             </div>
-
-             {/* Standard Presets */}
-             <div className="grid grid-cols-3 gap-2">
-                {STANDARD_SIZES.map(s => (
-                    <button 
-                        key={s.label}
-                        onClick={() => applyPreset(s)}
-                        className="py-1 px-2 rounded border border-stone-200 dark:border-stone-700 text-xs font-mono hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
-                    >
-                        {s.label}
-                    </button>
-                ))}
-                <button onClick={() => updatePlankShape('round')} className="py-1 px-2 rounded border border-dashed border-stone-300 dark:border-stone-600 text-xs font-mono text-stone-400 hover:text-orange-500 transition-colors">
-                    Custom...
-                </button>
-             </div>
-        </div>
-
-        {/* CONTROLS SCROLL AREA */}
-        <div className="flex-1 overflow-y-auto pr-2 space-y-6 custom-scrollbar">
+        {/* Scrollable Content Area */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
             
-            {/* INPUTS */}
-            <div className={`space-y-6 pb-6 border-b ${darkMode ? 'border-stone-700' : 'border-stone-100'}`}>
-                <div className="space-y-2">
-                    <div className="flex justify-between items-center"><label className="text-sm font-bold flex items-center gap-2"><Ruler className="w-4 h-4"/> Length</label><span className={`font-mono text-sm px-2 rounded ${darkMode?'bg-stone-800':'bg-stone-100'}`}>{(activeDims.length * 2).toFixed(1)}ft</span></div>
-                    <input type="range" min="1.5" max="10.0" step="0.1" value={(activeDims.length*2)} onChange={(e) => handleDimChange('length', e.target.value)} className="w-full accent-orange-600 h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer" />
-                </div>
-                
-                <div className="space-y-2">
-                    <div className="flex justify-between items-center"><label className="text-sm font-bold flex items-center gap-2"><Ruler className="w-4 h-4 rotate-90"/> Width / Dia</label><span className={`font-mono text-sm px-2 rounded ${darkMode?'bg-stone-800':'bg-stone-100'}`}>{(activeDims.width * 12).toFixed(0)}in</span></div>
-                    <input type="range" min="1" max="40" step="1" value={(activeDims.width*12)} onChange={(e) => handleDimChange('width', e.target.value)} className="w-full accent-orange-600 h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer" />
-                </div>
-                <div className="space-y-2">
-                    <div className="flex justify-between items-center"><label className="text-sm font-bold flex items-center gap-2"><Box className="w-4 h-4"/> Thickness</label><span className={`font-mono text-sm px-2 rounded ${darkMode?'bg-stone-800':'bg-stone-100'}`}>{(activeDims.thickness * 10).toFixed(1)}in</span></div>
-                    <input type="range" min="0.5" max="5.0" step="0.1" value={(activeDims.thickness*10)} onChange={(e) => handleDimChange('thickness', e.target.value)} className="w-full accent-orange-600 h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer" />
+            {/* 1. Material */}
+            <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 block flex items-center gap-2"><Palette className="w-3 h-3"/> Material Select</label>
+                <div className="grid grid-cols-5 gap-2">
+                    {Object.entries(WOOD_TYPES).map(([key, info]) => (
+                        <button key={key} onClick={() => setActiveWoodType(key)} className={`aspect-square rounded-lg border-2 transition-all relative group ${activeWoodType === key ? 'border-orange-500 scale-110 shadow-md' : 'border-transparent hover:scale-105'}`} style={{ backgroundColor: info.color }}>
+                            {activeWoodType === key && <div className="absolute inset-0 flex items-center justify-center text-white/50"><TreePine className="w-4 h-4" /></div>}
+                        </button>
+                    ))}
                 </div>
             </div>
 
-            {/* ACTION BUTTONS */}
-            <div className="space-y-3 pt-4 border-t border-stone-200 dark:border-stone-700">
-                <div className={`p-4 rounded-xl border-2 transition-all flex justify-between items-center ${sawActive ? 'border-orange-500 bg-orange-900/20' : (darkMode ? 'border-stone-700 bg-stone-800' : 'border-stone-100 bg-stone-50')}`}>
-                    <span className="font-bold flex items-center gap-2"><Navigation className={`w-4 h-4 ${sawActive ? 'animate-pulse' : ''}`} /> Power Saw</span>
-                    <button onClick={() => { setSawActive(!sawActive); setSelectedId(null); setPhysicsEnabled(false); }} className={`text-xs font-bold px-3 py-1 rounded-full border ${sawActive ? 'bg-orange-600 text-white' : (darkMode ? 'bg-stone-700 text-white' : 'bg-white text-stone-500')}`}>{sawActive ? 'STOP' : 'START'}</button>
-                </div>
-                {selectedId && <button onClick={deleteSelected} className="w-full py-3 rounded-xl border-2 border-red-900/30 text-red-500 font-bold bg-red-900/10 hover:bg-red-900/20 flex items-center justify-center gap-2 transition-all"><Trash2 className="w-4 h-4"/> Delete Piece</button>}
-                <button onClick={() => { setMasterDims({ width: 1.5, length: 7.0, thickness: 0.2 }); setPlanks([{ id: 'master', width: 1.5, length: 7.0, thickness: 0.2, x: 0, z: 0, shape: 'box' }]); setExplosions([]); setSelectedId(null); }} className={`w-full py-3 rounded-xl border-2 font-bold flex items-center justify-center gap-2 transition-all ${darkMode ? 'border-stone-700 text-stone-400 hover:bg-stone-800' : 'border-stone-200 text-stone-600 hover:bg-stone-100'}`}><RefreshCw className="w-4 h-4"/> Reset All</button>
+            {/* 2. Dimensions */}
+            <div>
+                 <label className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 block flex items-center gap-2"><Box className="w-3 h-3"/> Dimensions</label>
+                 <div className="space-y-4">
+                    <div className="space-y-1"><div className="flex justify-between text-xs"><span className="text-stone-500">Length</span><span className="font-mono">{currentLength.toFixed(1)}&apos;</span></div><input type="range" min="1.0" max="10.0" step="0.1" value={currentLength} onChange={(e) => handleDimChange('length', e.target.value / 2)} className="w-full accent-orange-600 h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer" /></div>
+                    <div className="space-y-1"><div className="flex justify-between text-xs"><span className="text-stone-500">Width</span><span className="font-mono">{currentWidth.toFixed(1)}&quot;</span></div><input type="range" min="1.0" max="40.0" step="0.5" value={currentWidth} onChange={(e) => handleDimChange('width', e.target.value / 12)} className="w-full accent-orange-600 h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer" /></div>
+                    <div className="space-y-1"><div className="flex justify-between text-xs"><span className="text-stone-500">{activePlank?.type === 'log' ? 'Diameter' : 'Thickness'}</span><span className="font-mono">{currentThick.toFixed(1)}&quot;</span></div><input type="range" min="0.5" max="20.0" step="0.5" value={currentThick} onChange={(e) => handleDimChange('thickness', e.target.value / 10)} className="w-full accent-orange-600 h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer" /></div>
+                 </div>
             </div>
 
-            {/* CUT LIST TABLE */}
-            <div className={`rounded-xl border overflow-hidden flex flex-col ${darkMode ? 'border-stone-700 bg-stone-800' : 'border-stone-200 bg-stone-50'}`}>
-                {/* Header Row */}
-                <div className={`flex justify-between items-center p-3 border-b ${darkMode ? 'border-stone-700 bg-stone-800' : 'border-stone-200 bg-stone-100'}`}>
-                    <div className="flex items-center gap-2">
-                        <Table2 className="w-4 h-4 text-stone-500"/>
-                        <span className="text-xs font-bold uppercase tracking-wider">Cut List ({planks.length})</span>
+            {/* 3. Shape & Presets */}
+            <div>
+                 <label className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 block flex items-center gap-2"><Box className="w-3 h-3"/> Shape Presets</label>
+                 <div className="flex gap-2 mb-3">
+                    <button onClick={() => setProfile('plank')} className={`flex-1 py-2 flex items-center justify-center gap-2 rounded-lg text-xs font-bold border-2 transition-all ${(!activePlank || activePlank.type !== 'log') ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-transparent bg-stone-100 text-stone-500 dark:bg-stone-800'}`}><Square className="w-4 h-4" /> Plank</button>
+                    <button onClick={() => setProfile('log')} className={`flex-1 py-2 flex items-center justify-center gap-2 rounded-lg text-xs font-bold border-2 transition-all ${(activePlank && activePlank.type === 'log') ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-transparent bg-stone-100 text-stone-500 dark:bg-stone-800'}`}><CylinderIcon className="w-4 h-4" /> Round Log</button>
+                 </div>
+                 {(!activePlank || activePlank.type !== 'log') && (
+                     <div className="grid grid-cols-3 gap-2 mt-2">
+                        {STANDARD_SIZES.map(s => (
+                            <button key={s.label} onClick={() => applyPreset(s)} className={`py-1 px-2 rounded border text-xs font-mono transition-colors ${darkMode ? 'border-stone-700 hover:bg-stone-800 text-white' : 'border-stone-200 hover:bg-stone-100 text-stone-800'}`}>{s.label}</button>
+                        ))}
+                     </div>
+                 )}
+            </div>
+
+            {/* 4. Saw Control */}
+            <div>
+                 <label className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 block flex items-center gap-2"><Scissors className="w-3 h-3"/> Saw Control</label>
+                 <div className={`p-4 rounded-xl border-2 transition-all flex flex-col gap-4 ${sawActive ? 'border-orange-500 bg-orange-900/20' : (darkMode ? 'border-stone-700 bg-stone-800' : 'border-stone-100 bg-stone-50')}`}>
+                    <div className="flex justify-between items-center">
+                        <span className="font-bold flex items-center gap-2"><Navigation className={`w-4 h-4 ${sawActive ? 'animate-pulse' : ''}`} /> Power Saw</span>
+                        <button onClick={() => { setSawActive(!sawActive); setSelectedId(null); setPhysicsEnabled(false); }} className={`text-xs font-bold px-3 py-1 rounded-full border ${sawActive ? 'bg-orange-600 text-white' : (darkMode ? 'bg-stone-700 text-white' : 'bg-white text-stone-500')}`}>{sawActive ? 'STOP' : 'START'}</button>
                     </div>
-                    <button onClick={downloadCSV} className="text-[10px] font-bold bg-orange-100 text-orange-700 px-2 py-1 rounded hover:bg-orange-200 flex items-center gap-1"><Download className="w-3 h-3"/> CSV</button>
+                    {sawActive && (
+                        <div className="space-y-2 animate-in fade-in">
+                            <div className="flex justify-between text-xs font-bold"><span className="flex items-center gap-1"><RotateCw className="w-3 h-3"/> Blade Angle</span><span className="font-mono">{(sawRotation * 180 / Math.PI).toFixed(0)}°</span></div>
+                            <input type="range" min="-1.57" max="1.57" step="0.1" value={sawRotation} onChange={(e) => setSawRotation(parseFloat(e.target.value))} className="w-full accent-orange-600 h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer" />
+                        </div>
+                    )}
+                 </div>
+            </div>
+
+            {/* 5. Cut List & CSV */}
+            <div className={`rounded-xl border overflow-hidden flex flex-col ${darkMode ? 'border-stone-700 bg-stone-800' : 'border-stone-200 bg-stone-100'}`}>
+                <div className={`flex justify-between items-center p-3 border-b ${darkMode ? 'border-stone-700 bg-stone-800' : 'border-stone-200 bg-stone-100'}`}>
+                    <div className="flex items-center gap-2"><Table2 className="w-4 h-4 text-stone-500"/><span className="text-xs font-bold uppercase tracking-wider">Cut List ({planks.length})</span></div>
+                    {/* CSV BUTTON */}
+                    <button onClick={downloadCSV} className="text-[10px] font-bold bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700 flex items-center gap-1 shadow-md transition-all active:scale-95"><Download className="w-3 h-3"/> Export CSV</button>
                 </div>
-                {/* Scrollable Rows */}
                 <div className="max-h-48 overflow-y-auto p-2 space-y-1 custom-scrollbar">
                     {planks.map((p, i) => {
-                        const vol = calculateBoardFeet(p.length*2, p.width*12, p.thickness*10).toFixed(1);
                         return (
-                            <div key={p.id} onClick={() => setSelectedId(p.id)} className={`grid grid-cols-4 gap-2 p-2 rounded text-xs cursor-pointer items-center border transition-all ${selectedId === p.id ? 'bg-orange-600 text-white border-orange-600' : (darkMode ? 'bg-stone-900 border-stone-700 hover:border-stone-500' : 'bg-white border-stone-200 hover:border-orange-300')}`}>
+                            <div key={p.id} onClick={() => setSelectedId(p.id)} className={`grid grid-cols-2 gap-2 p-2 rounded text-xs cursor-pointer items-center border transition-all ${selectedId === p.id ? 'bg-orange-600 text-white border-orange-600' : (darkMode ? 'bg-stone-900 border-stone-700 hover:border-stone-500' : 'bg-white border-stone-200 hover:border-orange-300')}`}>
                                 <span className="font-bold flex items-center gap-1 col-span-1">{selectedId === p.id && <MousePointer2 className="w-3 h-3"/>} #{i+1}</span>
-                                <span className="col-span-1 opacity-70 italic">{p.shape === 'round' ? 'Log' : 'Plank'}</span>
-                                <span className="font-mono text-center col-span-1">{(p.length*2).toFixed(1)}&apos;</span>
-                                <span className="text-right opacity-70 col-span-1">{vol} BF</span>
+                                <span className="col-span-1 opacity-70 italic text-right">{p.type === 'log' ? 'Round Log' : (p.points.length > 4 ? 'Custom Slab' : 'Plank')}</span>
                             </div>
                         );
                     })}
                 </div>
             </div>
+            
+            <button onClick={() => { setPlanks([{ id: 'master', points: [{x:-1,y:-2},{x:1,y:-2},{x:1,y:2},{x:-1,y:2}], thickness: 0.2, x: 0, z: 0, type: 'plank' }]); setExplosions([]); setSelectedId(null); }} className={`w-full py-3 rounded-xl border-2 font-bold flex items-center justify-center gap-2 transition-all ${darkMode ? 'border-stone-700 text-stone-400 hover:bg-stone-800' : 'border-stone-200 text-stone-600 hover:bg-stone-100'}`}><RefreshCw className="w-4 h-4"/> Reset All</button>
         </div>
 
-        {/* BOTTOM TOTALS (STICKY) */}
+        {/* Fixed Footer */}
         <div className={`p-6 border-t flex-shrink-0 ${darkMode ? 'border-stone-700 bg-stone-900' : 'border-stone-100 bg-white'}`}>
-            <div className="flex justify-between items-end mb-2">
-                <span className="text-stone-500 text-sm">Total Volume</span>
-                <span className="text-xl font-bold font-mono">{totalBF.toFixed(1)} <span className="text-sm font-normal text-stone-500">Board Feet</span></span>
-            </div>
-            <div className="flex justify-between items-end mb-4">
-                <span className="text-stone-500 text-sm">Est. Price ({WOOD_TYPES[activeWoodType].name})</span>
-                <span className="text-4xl font-serif">${finalPrice.toLocaleString()}</span>
-            </div>
+            <div className="flex justify-between items-end mb-4"><span className="text-stone-500 text-sm">Est. Price ({WOOD_TYPES[activeWoodType].name})</span><span className="text-4xl font-serif">${price.toLocaleString()}</span></div>
             <button className={`w-full py-4 rounded-xl font-bold transition transform active:scale-95 shadow-lg ${darkMode ? 'bg-white text-black hover:bg-stone-200' : 'bg-stone-900 text-white hover:bg-black'}`}>Request Custom Quote</button>
         </div>
       </div>
