@@ -238,7 +238,7 @@ const DimensionLabels = ({ isSelected, w, d, thickness, isLog }) => {
     );
 };
 
-// --- HYBRID PLANK COMPONENT (Fixed Props) ---
+// HYBRID PLANK COMPONENT (Fixed Props)
 function HybridPlank({ data, isSelected, onSelect, onUpdate, onDragStart, onDragEnd, sawActive, physicsMode, woodTypeKey }) {
   const meshRef = useRef();
   const woodInfo = WOOD_TYPES[woodTypeKey] || WOOD_TYPES.oak;
@@ -426,7 +426,6 @@ export default function LogConfigurator() {
   const handleDimChange = (axis, newVal) => {
     const targetId = selectedId || (planks.length > 0 ? planks[0].id : null);
     if(!targetId) return;
-
     setPlanks(prev => prev.map(p => {
         if (p.id !== targetId) return p;
         const bounds = getBounds(p.points);
