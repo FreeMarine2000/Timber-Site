@@ -238,8 +238,8 @@ const DimensionLabels = ({ isSelected, w, d, thickness, isLog }) => {
     );
 };
 
-// --- HYBRID PLANK COMPONENT ---
-function HybridPlank({ data, isSelected, onSelect, onDragStart, onDragEnd, sawActive, physicsMode, woodTypeKey }) {
+// --- HYBRID PLANK COMPONENT (Fixed Props) ---
+function HybridPlank({ data, isSelected, onSelect, onUpdate, onDragStart, onDragEnd, sawActive, physicsMode, woodTypeKey }) {
   const meshRef = useRef();
   const woodInfo = WOOD_TYPES[woodTypeKey] || WOOD_TYPES.oak;
   const isLog = data.type === 'log';
@@ -267,6 +267,7 @@ function HybridPlank({ data, isSelected, onSelect, onDragStart, onDragEnd, sawAc
 
   const bounds = useMemo(() => getBounds(data.points), [data.points]);
 
+  // PHYSICS HOOKS
   const [boxRef] = useBox(() => ({
     mass: 5, position: [data.x, 2, data.z], args: [bounds.w, data.thickness, bounds.d], type: 'Dynamic'
   }), useRef(null));
@@ -289,7 +290,8 @@ function HybridPlank({ data, isSelected, onSelect, onDragStart, onDragEnd, sawAc
     if (!physicsMode && dragging.current && !sawActive && mousePlane.current) {
         const target = new THREE.Vector3();
         state.raycaster.ray.intersectPlane(mousePlane.current, target);
-        onUpdate(data.id, { x: target.x, z: target.z });
+        // Correctly call the update function passed via props
+        if(onUpdate) onUpdate(data.id, { x: target.x, z: target.z });
     }
   });
 
@@ -319,6 +321,7 @@ function HybridPlank({ data, isSelected, onSelect, onDragStart, onDragEnd, sawAc
                     {Material}
                 </mesh>
             )}
+            {/* LABELS ARE NOW RENDERED IN PHYSICS MODE TOO */}
             <DimensionLabels isSelected={isSelected} w={bounds.w} d={bounds.d} thickness={data.thickness} isLog={isLog} />
         </group>
       );
@@ -426,20 +429,16 @@ export default function LogConfigurator() {
 
     setPlanks(prev => prev.map(p => {
         if (p.id !== targetId) return p;
-        
         const bounds = getBounds(p.points);
         if (axis === 'thickness') return { ...p, thickness: parseFloat(newVal) };
-        
         let scaleX = 1, scaleY = 1;
         if (axis === 'width') scaleX = newVal / (bounds.w || 1);
         if (axis === 'length') scaleY = newVal / (bounds.d || 1);
-        
         const newPoints = p.points.map(pt => ({ x: pt.x * scaleX, y: pt.y * scaleY }));
         return { ...p, points: newPoints };
     }));
   };
 
-  // --- CSV EXPORT LOGIC ---
   const downloadCSV = () => {
       const headers = ["ID", "Type", "Length (ft)", "Width (in)", "Thickness (in)", "Board Feet"].join(",");
       const rows = planks.map((p, i) => {
@@ -563,19 +562,18 @@ export default function LogConfigurator() {
         </Canvas>
       </div>
 
-      {/* RIGHT: CONTROLS (SCROLLABLE WRAPPER) */}
+      {/* RIGHT: CONTROLS (SCROLLABLE) */}
       <div className={`w-full lg:w-96 flex flex-col border-l overflow-hidden ${darkMode ? 'bg-stone-900 border-stone-800 text-white' : 'bg-white border-stone-200'}`}>
         
-        {/* Fixed Header */}
+        {/* FIXED Header */}
         <div className="p-6 border-b flex-shrink-0">
             <h3 className="text-2xl font-serif mb-1">{selectedId ? "Edit Piece" : "Master Log"}</h3>
             <p className={`text-sm ${darkMode ? 'text-stone-400' : 'text-stone-500'}`}>{selectedId ? "Drag to move. Drive saw to cut." : "Define main dimensions. We mill to order."}</p>
         </div>
 
-        {/* Scrollable Content Area */}
+        {/* SCROLLABLE Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
-            
-            {/* 1. Material */}
+            {/* Material */}
             <div>
                 <label className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 block flex items-center gap-2"><Palette className="w-3 h-3"/> Material Select</label>
                 <div className="grid grid-cols-5 gap-2">
@@ -587,7 +585,7 @@ export default function LogConfigurator() {
                 </div>
             </div>
 
-            {/* 2. Dimensions */}
+            {/* Dimensions */}
             <div>
                  <label className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 block flex items-center gap-2"><Box className="w-3 h-3"/> Dimensions</label>
                  <div className="space-y-4">
@@ -597,7 +595,7 @@ export default function LogConfigurator() {
                  </div>
             </div>
 
-            {/* 3. Shape & Presets */}
+            {/* Shape Presets */}
             <div>
                  <label className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 block flex items-center gap-2"><Box className="w-3 h-3"/> Shape Presets</label>
                  <div className="flex gap-2 mb-3">
@@ -613,7 +611,7 @@ export default function LogConfigurator() {
                  )}
             </div>
 
-            {/* 4. Saw Control */}
+            {/* Saw Control */}
             <div>
                  <label className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2 block flex items-center gap-2"><Scissors className="w-3 h-3"/> Saw Control</label>
                  <div className={`p-4 rounded-xl border-2 transition-all flex flex-col gap-4 ${sawActive ? 'border-orange-500 bg-orange-900/20' : (darkMode ? 'border-stone-700 bg-stone-800' : 'border-stone-100 bg-stone-50')}`}>
@@ -630,11 +628,11 @@ export default function LogConfigurator() {
                  </div>
             </div>
 
-            {/* 5. Cut List & CSV */}
+            {/* Cut List & CSV */}
             <div className={`rounded-xl border overflow-hidden flex flex-col ${darkMode ? 'border-stone-700 bg-stone-800' : 'border-stone-200 bg-stone-100'}`}>
                 <div className={`flex justify-between items-center p-3 border-b ${darkMode ? 'border-stone-700 bg-stone-800' : 'border-stone-200 bg-stone-100'}`}>
                     <div className="flex items-center gap-2"><Table2 className="w-4 h-4 text-stone-500"/><span className="text-xs font-bold uppercase tracking-wider">Cut List ({planks.length})</span></div>
-                    {/* CSV BUTTON */}
+                    {/* FIXED CSV BUTTON */}
                     <button onClick={downloadCSV} className="text-[10px] font-bold bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700 flex items-center gap-1 shadow-md transition-all active:scale-95"><Download className="w-3 h-3"/> Export CSV</button>
                 </div>
                 <div className="max-h-48 overflow-y-auto p-2 space-y-1 custom-scrollbar">
@@ -652,7 +650,7 @@ export default function LogConfigurator() {
             <button onClick={() => { setPlanks([{ id: 'master', points: [{x:-1,y:-2},{x:1,y:-2},{x:1,y:2},{x:-1,y:2}], thickness: 0.2, x: 0, z: 0, type: 'plank' }]); setExplosions([]); setSelectedId(null); }} className={`w-full py-3 rounded-xl border-2 font-bold flex items-center justify-center gap-2 transition-all ${darkMode ? 'border-stone-700 text-stone-400 hover:bg-stone-800' : 'border-stone-200 text-stone-600 hover:bg-stone-100'}`}><RefreshCw className="w-4 h-4"/> Reset All</button>
         </div>
 
-        {/* Fixed Footer */}
+        {/* FIXED Footer */}
         <div className={`p-6 border-t flex-shrink-0 ${darkMode ? 'border-stone-700 bg-stone-900' : 'border-stone-100 bg-white'}`}>
             <div className="flex justify-between items-end mb-4"><span className="text-stone-500 text-sm">Est. Price ({WOOD_TYPES[activeWoodType].name})</span><span className="text-4xl font-serif">${price.toLocaleString()}</span></div>
             <button className={`w-full py-4 rounded-xl font-bold transition transform active:scale-95 shadow-lg ${darkMode ? 'bg-white text-black hover:bg-stone-200' : 'bg-stone-900 text-white hover:bg-black'}`}>Request Custom Quote</button>
