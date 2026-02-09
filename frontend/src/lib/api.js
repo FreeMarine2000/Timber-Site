@@ -25,3 +25,8 @@ export const getCategories = async () => {
   const response = await api.get('/categories/');
   return response.data;
 };
+
+export const createOrderSnapshot = async (payload) => {
+  const response = await api.post('/orders/', payload);
+  return response.data;
+};
