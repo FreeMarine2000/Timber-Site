@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
+import { useRouter } from 'next/navigation';
 import { ArrowLeft, Minus, Plus, Trash2, ShoppingBag, CreditCard } from 'lucide-react';
 import { useCart } from '@/Context/CartContext';
 import { createOrderSnapshot } from '@/lib/api';
@@ -14,6 +15,7 @@ export default function CartPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [orderReference, setOrderReference] = useState('');
+  const router = useRouter();
 
   const subtotal = useMemo(() => cartTotal, [cartTotal]);
   const shipping = subtotal > 0 ? 18 : 0;
@@ -40,8 +42,14 @@ export default function CartPage() {
         currency: 'USD',
       };
       const response = await createOrderSnapshot(payload);
-      setOrderReference(response.reference || '');
+      const reference = response.reference || '';
+      setOrderReference(reference);
       clearCart();
+      if (reference) {
+        router.push(`/order-confirmation?ref=${encodeURIComponent(reference)}`);
+      } else {
+        router.push('/order-confirmation');
+      }
     } catch (error) {
       console.error('Checkout failed:', error);
       setSubmitError('Checkout failed. Please try again.');
