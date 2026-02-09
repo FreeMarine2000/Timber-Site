@@ -1,6 +1,6 @@
 from rest_framework import viewsets
-from .models import Category, Product
-from .serializers import CategorySerializer, ProductSerializer
+from .models import Category, Product, OrderSnapshot
+from .serializers import CategorySerializer, ProductSerializer, OrderSnapshotSerializer
 
 class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all()
@@ -21,3 +21,8 @@ class ProductViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(wood_type=wood_type)
             
         return queryset
+
+
+class OrderSnapshotViewSet(viewsets.ModelViewSet):
+    queryset = OrderSnapshot.objects.all().order_by('-created_at')
+    serializer_class = OrderSnapshotSerializer
