@@ -17,6 +17,12 @@ class ProductSerializer(serializers.ModelSerializer):
 
 
 class OrderSnapshotSerializer(serializers.ModelSerializer):
+    def validate_currency(self, value):
+        normalized = value.upper()
+        if normalized not in {OrderSnapshot.Currency.USD, OrderSnapshot.Currency.INR}:
+            raise serializers.ValidationError("Currency must be INR or USD.")
+        return normalized
+
     class Meta:
         model = OrderSnapshot
         fields = ['id', 'reference', 'payload', 'subtotal', 'shipping', 'tax', 'total', 'currency', 'created_at']

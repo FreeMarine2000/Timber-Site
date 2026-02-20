@@ -39,14 +39,27 @@ class Product(models.Model):
 
 
 class OrderSnapshot(models.Model):
+    class Currency(models.TextChoices):
+        USD = 'USD', 'USD'
+        INR = 'INR', 'INR'
+
     reference = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     payload = models.JSONField()
     subtotal = models.DecimalField(max_digits=10, decimal_places=2)
     shipping = models.DecimalField(max_digits=10, decimal_places=2)
     tax = models.DecimalField(max_digits=10, decimal_places=2)
     total = models.DecimalField(max_digits=10, decimal_places=2)
-    currency = models.CharField(max_length=8, default='USD')
+    currency = models.CharField(max_length=3, choices=Currency.choices, default=Currency.USD)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f"Order {self.reference}"
+
+
+class ExchangeRateCache(models.Model):
+    pair = models.CharField(max_length=16, unique=True, default="USD_INR")
+    rate = models.DecimalField(max_digits=12, decimal_places=6)
+    fetched_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.pair}: {self.rate}"

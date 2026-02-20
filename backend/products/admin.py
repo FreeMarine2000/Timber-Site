@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Category, Product, OrderSnapshot
+from .models import Category, Product, OrderSnapshot, ExchangeRateCache
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
@@ -18,3 +18,9 @@ class ProductAdmin(admin.ModelAdmin):
 class OrderSnapshotAdmin(admin.ModelAdmin):
     list_display = ['reference', 'total', 'currency', 'created_at']
     search_fields = ['reference']
+
+
+@admin.register(ExchangeRateCache)
+class ExchangeRateCacheAdmin(admin.ModelAdmin):
+    list_display = ['pair', 'rate', 'fetched_at']
+    search_fields = ['pair']

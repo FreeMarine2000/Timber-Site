@@ -1,12 +1,12 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Minus, Plus, Trash2, ShoppingBag, CreditCard } from 'lucide-react';
 import { useCart } from '@/Context/CartContext';
-import { createOrderSnapshot } from '@/lib/api';
+import { createOrderSnapshot, getLocationCurrency } from '@/lib/api';
 
 const TEXTURE_BANK = ['/wood1.png', '/wood2.png', '/wood3.png', '/wood4.png'];
 
@@ -15,6 +15,10 @@ export default function CartPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [orderReference, setOrderReference] = useState('');
+  const [currency, setCurrency] = useState('USD');
+  const [conversionRate, setConversionRate] = useState(1);
+  const [locationStatus, setLocationStatus] = useState('Detecting location...');
+  const [locationHints, setLocationHints] = useState({});
   const router = useRouter();
 
   const subtotal = useMemo(() => cartTotal, [cartTotal]);
@@ -23,6 +27,53 @@ export default function CartPage() {
   const grandTotal = subtotal + shipping + tax;
 
   const getItemImage = (index) => TEXTURE_BANK[index % TEXTURE_BANK.length];
+
+  useEffect(() => {
+    const detectCurrency = async () => {
+      try {
+        const locale = navigator.language || 'en-US';
+        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+        const localeCountry = locale.includes('-') ? locale.split('-')[1].toUpperCase() : '';
+        const hints = {
+          locale,
+          timezone,
+          countryCode: localeCountry,
+        };
+        setLocationHints(hints);
+        const { currency: detectedCurrency, rate } = await getLocationCurrency({
+          ...hints,
+        });
+
+        if (detectedCurrency === 'INR' || detectedCurrency === 'USD') {
+          setCurrency(detectedCurrency);
+          const normalizedRate = Number(rate);
+          const effectiveRate = detectedCurrency === 'INR' && normalizedRate > 0 ? normalizedRate : 1;
+          setConversionRate(effectiveRate);
+          setLocationStatus(`Currency set by location: ${detectedCurrency}${effectiveRate > 1 ? ` (1 USD = ${effectiveRate} INR)` : ''}`);
+          return;
+        }
+      } catch (error) {
+        console.error('Location currency detection failed:', error);
+      }
+
+      setCurrency('USD');
+      setConversionRate(1);
+      setLocationStatus('Using default currency: USD');
+    };
+
+    detectCurrency();
+  }, []);
+
+  const formatCurrency = (amount) => {
+    const locale = currency === 'INR' ? 'en-IN' : 'en-US';
+    const displayAmount = (Number(amount) || 0) * conversionRate;
+    return new Intl.NumberFormat(locale, {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(displayAmount);
+  };
 
   const handleCheckout = async () => {
     if (cart.length === 0 || isSubmitting) return;
@@ -39,9 +90,9 @@ export default function CartPage() {
         shipping,
         tax,
         total: grandTotal,
-        currency: 'USD',
+        currency,
       };
-      const response = await createOrderSnapshot(payload);
+      const response = await createOrderSnapshot(payload, locationHints);
       const reference = response.reference || '';
       setOrderReference(reference);
       clearCart();
@@ -118,7 +169,7 @@ export default function CartPage() {
                             {item.wood_type || 'Premium hardwood'}
                           </p>
                         </div>
-                        <p className="text-lg font-bold text-stone-900 dark:text-white">${item.price}</p>
+                        <p className="text-lg font-bold text-stone-900 dark:text-white">{formatCurrency(item.price)}</p>
                       </div>
 
                       <div className="flex flex-wrap items-center gap-4">
@@ -166,22 +217,29 @@ export default function CartPage() {
               </div>
 
               <div className="space-y-4 text-sm">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-white/70 dark:text-stone-500">Currency</span>
+                  <span className="rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold tracking-wide text-white dark:border-stone-300 dark:bg-stone-100 dark:text-stone-900">
+                    {currency}
+                  </span>
+                </div>
+                <p className="text-[11px] text-white/60 dark:text-stone-500">{locationStatus}</p>
                 <div className="flex items-center justify-between">
                   <span className="text-white/70 dark:text-stone-500">Subtotal</span>
-                  <span className="font-semibold">${subtotal}</span>
+                  <span className="font-semibold">{formatCurrency(subtotal)}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-white/70 dark:text-stone-500">Estimated shipping</span>
-                  <span className="font-semibold">${shipping}</span>
+                  <span className="font-semibold">{formatCurrency(shipping)}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-white/70 dark:text-stone-500">Tax</span>
-                  <span className="font-semibold">${tax}</span>
+                  <span className="font-semibold">{formatCurrency(tax)}</span>
                 </div>
                 <div className="h-px bg-white/10 dark:bg-stone-200/60" />
                 <div className="flex items-center justify-between text-lg">
                   <span className="font-semibold">Total</span>
-                  <span className="font-bold">${grandTotal}</span>
+                  <span className="font-bold">{formatCurrency(grandTotal)}</span>
                 </div>
               </div>
 
