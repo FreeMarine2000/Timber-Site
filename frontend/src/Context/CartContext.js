@@ -5,24 +5,24 @@ import { createContext, useContext, useState, useEffect } from 'react';
 const CartContext = createContext();
 
 export function CartProvider({ children }) {
-  // Initialize cart from localStorage using lazy initializer
-  const [cart, setCart] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const savedCart = localStorage.getItem('timberCart');
-      if (savedCart) {
-        try {
-          return JSON.parse(savedCart);
-        } catch (error) {
-          console.error('Error parsing saved cart:', error);
-          return [];
-        }
-      }
-    }
-    return [];
-  });
+  // Keep initial render deterministic for SSR hydration.
+  const [cart, setCart] = useState([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
 
-  // Save cart to localStorage whenever it changes
+  // Load cart from localStorage after mount.
+  useEffect(() => {
+    const savedCart = localStorage.getItem('timberCart');
+    if (!savedCart) return;
+    try {
+      const parsedCart = JSON.parse(savedCart);
+      const timer = setTimeout(() => setCart(parsedCart), 0);
+      return () => clearTimeout(timer);
+    } catch (error) {
+      console.error('Error parsing saved cart:', error);
+    }
+  }, []);
+
+  // Save cart to localStorage whenever it changes.
   useEffect(() => {
     localStorage.setItem('timberCart', JSON.stringify(cart));
   }, [cart]);
