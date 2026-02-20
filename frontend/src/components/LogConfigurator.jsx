@@ -4,10 +4,10 @@
 import { useRef, useState, useMemo, Suspense, useEffect } from 'react';
 import { Canvas, useFrame, useLoader } from '@react-three/fiber';
 import { OrbitControls, Center, Grid, Html, Outlines, Text } from '@react-three/drei';
-import { Physics, useBox, usePlane, useCylinder } from '@react-three/cannon';
 import * as THREE from 'three';
-import { Truck, Ruler, RefreshCw, Calculator, Sliders, Navigation, AlertTriangle, Layers, Trash2, MousePointer2, Download, Box, Table2, TreePine, Palette, RotateCw, Scissors, Cylinder as CylinderIcon, Square } from 'lucide-react';
+import { Truck, RefreshCw, Navigation, AlertTriangle, MousePointer2, Download, Box, Table2, TreePine, Palette, RotateCw, Scissors, Cylinder as CylinderIcon, Square } from 'lucide-react';
 import { useTheme } from '@/components/Providers';
+import { getLocationCurrency } from '@/lib/api';
 
 // --- CONFIGURATION ---
 const WOOD_TYPES = {
@@ -27,6 +27,22 @@ const STANDARD_SIZES = [
 ];
 
 // --- GEOMETRY UTILS ---
+const EPSILON = 1e-6;
+const POINT_EPS = 1e-4;
+const MIN_PIECE_AREA = 0.03;
+
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+const almostEqual = (a, b, eps = EPSILON) => Math.abs(a - b) <= eps;
+
+const pointsEqual = (a, b, eps = POINT_EPS) =>
+  almostEqual(a.x, b.x, eps) && almostEqual(a.y, b.y, eps);
+
+const roundPoint = (p, digits = 6) => {
+  const f = 10 ** digits;
+  return { x: Math.round(p.x * f) / f, y: Math.round(p.y * f) / f };
+};
+
 const getCentroid = (points) => {
     let cx = 0, cy = 0;
     points.forEach(p => { cx += p.x; cy += p.y; });
@@ -37,14 +53,63 @@ const getIntersectionLineInfinite = (line1, line2, seg1, seg2) => {
     const x1 = line1.x, y1 = line1.y, x2 = line2.x, y2 = line2.y;
     const x3 = seg1.x, y3 = seg1.y, x4 = seg2.x, y4 = seg2.y;
     const denom = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
-    if (denom == 0) return null;
+    if (Math.abs(denom) < EPSILON) return null;
     const ua = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / denom;
     const ub = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / denom;
-    if (ub >= 0 && ub <= 1) return { x: x1 + ua * (x2 - x1), y: y1 + ua * (y2 - y1) };
+    if (ub >= -EPSILON && ub <= 1 + EPSILON) return roundPoint({ x: x1 + ua * (x2 - x1), y: y1 + ua * (y2 - y1) });
     return null;
 };
 
 const isLeft = (a, b, c) => ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)) > 0;
+
+const polygonSignedArea = (points) => {
+  let area = 0;
+  for (let i = 0; i < points.length; i++) {
+    const p1 = points[i];
+    const p2 = points[(i + 1) % points.length];
+    area += (p1.x * p2.y) - (p2.x * p1.y);
+  }
+  return area / 2;
+};
+
+const polygonArea = (points) => Math.abs(polygonSignedArea(points));
+
+const removeSequentialDuplicates = (points) => {
+  if (points.length === 0) return points;
+  const out = [roundPoint(points[0])];
+  for (let i = 1; i < points.length; i++) {
+    const rounded = roundPoint(points[i]);
+    if (!pointsEqual(rounded, out[out.length - 1])) {
+      out.push(rounded);
+    }
+  }
+  if (out.length > 1 && pointsEqual(out[0], out[out.length - 1])) {
+    out.pop();
+  }
+  return out;
+};
+
+const removeCollinear = (points) => {
+  if (points.length < 4) return points;
+  const out = [];
+  for (let i = 0; i < points.length; i++) {
+    const prev = points[(i - 1 + points.length) % points.length];
+    const curr = points[i];
+    const next = points[(i + 1) % points.length];
+    const cross = (curr.x - prev.x) * (next.y - curr.y) - (curr.y - prev.y) * (next.x - curr.x);
+    if (Math.abs(cross) > POINT_EPS) out.push(curr);
+  }
+  return out;
+};
+
+const normalizePolygon = (points) => {
+  let poly = removeSequentialDuplicates(points);
+  poly = removeCollinear(poly);
+  if (poly.length < 3) return null;
+  if (polygonArea(poly) < MIN_PIECE_AREA) return null;
+  if (polygonSignedArea(poly) < 0) poly = [...poly].reverse();
+  return poly;
+};
 
 const slicePolygon = (points, l1, l2) => {
     const poly1 = [];
@@ -59,8 +124,10 @@ const slicePolygon = (points, l1, l2) => {
             poly2.push(intersection);
         }
     }
-    if (poly1.length < 3 || poly2.length < 3) return null;
-    return [poly1, poly2];
+    const n1 = normalizePolygon(poly1);
+    const n2 = normalizePolygon(poly2);
+    if (!n1 || !n2) return null;
+    return [n1, n2];
 };
 
 const getBounds = (points) => {
@@ -78,14 +145,44 @@ const calculateBoardFeet = (lengthFt, widthIn, thickIn) => {
     return (lengthFt * widthIn * thickIn) / 12;
 };
 
+const pointInPolygon = (point, points) => {
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const xi = points[i].x;
+    const yi = points[i].y;
+    const xj = points[j].x;
+    const yj = points[j].y;
+    const intersects = ((yi > point.y) !== (yj > point.y)) &&
+      (point.x < (xj - xi) * (point.y - yi) / ((yj - yi) || 1e-9) + xi);
+    if (intersects) inside = !inside;
+  }
+  return inside;
+};
+
+const countLinePolygonIntersections = (points, l1, l2) => {
+  const intersections = [];
+  for (let i = 0; i < points.length; i++) {
+    const curr = points[i];
+    const next = points[(i + 1) % points.length];
+    const intersection = getIntersectionLineInfinite(l1, l2, curr, next);
+    if (!intersection) continue;
+    if (!intersections.some((p) => pointsEqual(p, intersection))) {
+      intersections.push(intersection);
+    }
+  }
+  return intersections.length;
+};
+
+const makePieceId = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return Math.random().toString(36).slice(2);
+};
+
 // --- COMPONENTS ---
 
-function IndianTruck({ children, physicsEnabled }) {
-  useBox(() => ({ args: [2.4, 0.2, 6], position: [0, 1.6, -1.5], type: 'Static' }));
-  useBox(() => ({ args: [0.1, 1, 6], position: [1.15, 2.1, -1.5], type: 'Static' })); 
-  useBox(() => ({ args: [0.1, 1, 6], position: [-1.15, 2.1, -1.5], type: 'Static' })); 
-  useBox(() => ({ args: [2.4, 1, 0.1], position: [0, 2.1, -4.5], type: 'Static' })); 
-
+function IndianTruck({ children }) {
   return (
     <group position={[0, -1.5, 0]} scale={0.8}>
         <mesh position={[0, 0.5, 0]}><boxGeometry args={[2.5, 0.5, 8]} /><meshStandardMaterial color="#1a1a1a" /></mesh>
@@ -118,8 +215,12 @@ function Wheel({ position }) {
 }
 
 function Floor() {
-  const [ref] = usePlane(() => ({ rotation: [-Math.PI / 2, 0, 0], position: [0, -2, 0] }));
-  return <mesh ref={ref} receiveShadow><shadowMaterial opacity={0.2} /></mesh>;
+  return (
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -2, 0]} receiveShadow>
+      <planeGeometry args={[100, 100]} />
+      <shadowMaterial opacity={0.2} />
+    </mesh>
+  );
 }
 
 function RCDrivingSaw({ active, onUpdatePos, sawRotation, onClickToCut }) {
@@ -238,11 +339,13 @@ const DimensionLabels = ({ isSelected, w, d, thickness, isLog }) => {
     );
 };
 
-// HYBRID PLANK COMPONENT (Fixed Props)
-function HybridPlank({ data, isSelected, onSelect, onUpdate, onDragStart, onDragEnd, sawActive, physicsMode, woodTypeKey }) {
+// HYBRID PLANK COMPONENT
+function HybridPlank({ data, isSelected, isDragging, onSelect, onToggleDrag, onUpdate, sawActive, woodTypeKey }) {
   const meshRef = useRef();
   const woodInfo = WOOD_TYPES[woodTypeKey] || WOOD_TYPES.oak;
   const isLog = data.type === 'log';
+
+  const rotation = data.rotation || [0, 0, 0];
 
   const shape = useMemo(() => {
       const s = new THREE.Shape();
@@ -267,30 +370,13 @@ function HybridPlank({ data, isSelected, onSelect, onUpdate, onDragStart, onDrag
 
   const bounds = useMemo(() => getBounds(data.points), [data.points]);
 
-  // PHYSICS HOOKS
-  const [boxRef] = useBox(() => ({
-    mass: 5, position: [data.x, 2, data.z], args: [bounds.w, data.thickness, bounds.d], type: 'Dynamic'
-  }), useRef(null));
-
-  const [cylRef] = useCylinder(() => ({
-    mass: 5, 
-    position: [data.x, 2, data.z], 
-    args: [data.thickness/2, data.thickness/2, bounds.d, 16],
-    rotation: [Math.PI/2, 0, 0],
-    type: 'Dynamic'
-  }), useRef(null));
-
-  const physRef = isLog ? cylRef : boxRef;
-
-  const dragging = useRef(false);
   const mousePlane = useRef(null);
   useEffect(() => { mousePlane.current = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); }, []);
 
   useFrame((state) => {
-    if (!physicsMode && dragging.current && !sawActive && mousePlane.current) {
+    if (isDragging && !sawActive && mousePlane.current) {
         const target = new THREE.Vector3();
         state.raycaster.ray.intersectPlane(mousePlane.current, target);
-        // Correctly call the update function passed via props
         if(onUpdate) onUpdate(data.id, { x: target.x, z: target.z });
     }
   });
@@ -306,46 +392,18 @@ function HybridPlank({ data, isSelected, onSelect, onUpdate, onDragStart, onDrag
   );
 
   const extrudeSettings = { depth: data.thickness, bevelEnabled: true, bevelSegments: 2, steps: 1, bevelSize: 0.01, bevelThickness: 0.01 };
-
-  if (physicsMode) {
-      return (
-        <group ref={physRef}>
-            {isLog ? (
-                <mesh rotation={[Math.PI/2, 0, 0]}>
-                    <cylinderGeometry args={[data.thickness/2, data.thickness/2, bounds.d, 32]} />
-                    {Material}
-                </mesh>
-            ) : (
-                <mesh rotation={[Math.PI/2, 0, 0]} position={[0, -data.thickness/2, 0]}>
-                    <extrudeGeometry args={[shape, extrudeSettings]} />
-                    {Material}
-                </mesh>
-            )}
-            {/* LABELS ARE NOW RENDERED IN PHYSICS MODE TOO */}
-            <DimensionLabels isSelected={isSelected} w={bounds.w} d={bounds.d} thickness={data.thickness} isLog={isLog} />
-        </group>
-      );
-  }
-
   return (
     <group 
         ref={meshRef}
         position={[data.x, 0, data.z]}
-        onPointerDown={(e) => {
+        rotation={[rotation[0], rotation[1], rotation[2]]} 
+        onClick={(e) => {
             if (sawActive) return;
             e.stopPropagation(); 
             onSelect(data.id);
-            onDragStart(); 
-            dragging.current = true;
-            document.body.style.cursor = 'grabbing';
+            onToggleDrag(data.id);
         }}
-        onPointerUp={(e) => {
-            e.stopPropagation();
-            dragging.current = false;
-            onDragEnd(); 
-            document.body.style.cursor = 'auto';
-        }}
-        onPointerOver={() => !sawActive && (document.body.style.cursor = 'grab')}
+        onPointerOver={() => !sawActive && (document.body.style.cursor = isDragging ? 'grabbing' : 'grab')}
         onPointerOut={() => (document.body.style.cursor = 'auto')}
     >
         {isLog ? (
@@ -373,12 +431,12 @@ function LoadingFallback() {
 // --- MAIN COMPONENT ---
 export default function LogConfigurator() {
   const [viewMode, setViewMode] = useState('studio'); 
-  const [physicsEnabled, setPhysicsEnabled] = useState(false);
   const [activeWoodType, setActiveWoodType] = useState('walnut');
-  const [isDragging, setIsDragging] = useState(false);
+  const [draggingId, setDraggingId] = useState(null);
+  const [debugOpen, setDebugOpen] = useState(true);
   
   const initialPoints = [{x: -1, y: -2}, {x: 1, y: -2}, {x: 1, y: 2}, {x: -1, y: 2}];
-  const [planks, setPlanks] = useState([{ id: 'master', points: initialPoints, thickness: 0.2, x: 0, z: 0, type: 'plank' }]);
+  const [planks, setPlanks] = useState([{ id: 'master', points: initialPoints, thickness: 0.2, x: 0, z: 0, type: 'plank', rotation: [0, 0, 0], cutReadyAt: 0 }]);
   const [selectedId, setSelectedId] = useState(null);
   
   const [sawActive, setSawActive] = useState(false);
@@ -386,13 +444,88 @@ export default function LogConfigurator() {
   const [sawRotation, setSawRotation] = useState(0); 
   const [explosions, setExplosions] = useState([]);
   const [errorMsg, setErrorMsg] = useState('');
+  const [currency, setCurrency] = useState('USD');
+  const [conversionRate, setConversionRate] = useState(1);
+  const [lastCutSummary, setLastCutSummary] = useState({ cutCount: 0, cooldownSkips: 0, invalidSlices: 0, token: 0 });
+  const [cutToken, setCutToken] = useState(0);
 
   const { darkMode } = useTheme();
   const woodPriceMult = WOOD_TYPES[activeWoodType].priceMult;
   const totalVolume = planks.reduce((acc, p) => acc + (2 * p.thickness), 0); 
   const price = Math.floor(totalVolume * 200 * woodPriceMult);
 
+  useEffect(() => {
+    const detectCurrency = async () => {
+      try {
+        const locale = navigator.language || 'en-US';
+        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+        const localeCountry = locale.includes('-') ? locale.split('-')[1].toUpperCase() : '';
+        const { currency: detectedCurrency, rate } = await getLocationCurrency({
+          locale,
+          timezone,
+          countryCode: localeCountry,
+        });
+
+        if (detectedCurrency === 'INR' || detectedCurrency === 'USD') {
+          setCurrency(detectedCurrency);
+          const normalizedRate = Number(rate);
+          setConversionRate(detectedCurrency === 'INR' && normalizedRate > 0 ? normalizedRate : 1);
+          return;
+        }
+      } catch (error) {
+        console.error('Configurator currency detection failed:', error);
+      }
+
+      setCurrency('USD');
+      setConversionRate(1);
+    };
+
+    detectCurrency();
+  }, []);
+
+  const formatCurrency = (amount) => {
+    const locale = currency === 'INR' ? 'en-IN' : 'en-US';
+    const displayAmount = (Number(amount) || 0) * conversionRate;
+    return new Intl.NumberFormat(locale, {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(displayAmount);
+  };
+
   const activePlank = selectedId ? planks.find(p => p.id === selectedId) : planks[0];
+
+  const selectedDebug = useMemo(() => {
+    if (!activePlank) return null;
+    const dx = Math.sin(sawRotation);
+    const dy = Math.cos(sawRotation);
+    const { x, z } = sawPos;
+    const lineStart = { x: x - dx * 20, y: z - dy * 20 };
+    const lineEnd = { x: x + dx * 20, y: z + dy * 20 };
+    const l1 = { x: lineStart.x - activePlank.x, y: lineStart.y - activePlank.z };
+    const l2 = { x: lineEnd.x - activePlank.x, y: lineEnd.y - activePlank.z };
+    const localSaw = { x: x - activePlank.x, y: z - activePlank.z };
+    const bounds = getBounds(activePlank.points);
+    return {
+      area: polygonArea(activePlank.points),
+      intersections: countLinePolygonIntersections(activePlank.points, l1, l2),
+      containsSaw: pointInPolygon(localSaw, activePlank.points),
+      cutReady: (activePlank.cutReadyAt || 0) <= cutToken,
+      cutReadyAt: activePlank.cutReadyAt || 0,
+      currentToken: cutToken,
+      width: bounds.w,
+      length: bounds.d,
+      thickness: activePlank.thickness,
+    };
+  }, [activePlank, sawPos, sawRotation, cutToken]);
+
+  useEffect(() => {
+    document.body.style.cursor = draggingId ? 'grabbing' : 'auto';
+    return () => {
+      document.body.style.cursor = 'auto';
+    };
+  }, [draggingId]);
 
   const setProfile = (type) => {
     const targetId = selectedId || (planks.length > 0 ? planks[0].id : null);
@@ -402,7 +535,7 @@ export default function LogConfigurator() {
         if (p.id !== targetId) return p;
         const newPoints = [{x: -1, y: -2}, {x: 1, y: -2}, {x: 1, y: 2}, {x: -1, y: 2}]; 
         const newThick = type === 'log' ? 1.0 : 0.2; 
-        return { ...p, points: newPoints, thickness: newThick, type: type };
+        return { ...p, points: newPoints, thickness: newThick, type: type, rotation: [0,0,0] };
     }));
   };
 
@@ -460,47 +593,103 @@ export default function LogConfigurator() {
   };
 
   const attemptCut = () => {
+    const nextCutToken = cutToken + 1;
+    setCutToken(nextCutToken);
     const { x, z } = sawPos;
-    let hitIndex = -1;
-    for (let i = 0; i < planks.length; i++) {
-        const p = planks[i];
-        if (x > p.x - 2 && x < p.x + 2 && z > p.z - 2 && z < p.z + 2) { hitIndex = i; break; }
-    }
-    if (hitIndex === -1) { setErrorMsg("Missed!"); setTimeout(() => setErrorMsg(''), 1000); return; }
-
-    const target = planks[hitIndex];
     const dx = Math.sin(sawRotation);
     const dy = Math.cos(sawRotation);
-    const localSawX = x - target.x;
-    const localSawY = z - target.z;
-    const l1 = { x: localSawX - dx * 10, y: localSawY - dy * 10 };
-    const l2 = { x: localSawX + dx * 10, y: localSawY + dy * 10 };
-    
-    const result = slicePolygon(target.points, l1, l2);
-    if (!result) { setErrorMsg("Cut failed!"); setTimeout(() => setErrorMsg(''), 1000); return; }
-    
-    const [poly1Points, poly2Points] = result;
-    const c1 = getCentroid(poly1Points);
-    const c2 = getCentroid(poly2Points);
-    const newPoints1 = poly1Points.map(p => ({ x: p.x - c1.x, y: p.y - c1.y }));
-    const newPoints2 = poly2Points.map(p => ({ x: p.x - c2.x, y: p.y - c2.y }));
+    const lineStart = { x: x - dx * 20, y: z - dy * 20 };
+    const lineEnd = { x: x + dx * 20, y: z + dy * 20 };
+    const nx = -dy;
+    const ny = dx;
+    const nextPlanks = [];
+    const newExplosions = [];
+    let cutCount = 0;
+    let cooldownSkips = 0;
+    let invalidSlices = 0;
 
-    const nx = -dy, ny = dx;
-    const vec1 = { x: c1.x - localSawX, y: c1.y - localSawY };
-    const dot1 = vec1.x * nx + vec1.y * ny;
-    const dir1 = dot1 > 0 ? 1 : -1;
-    const sep = 0.4; 
-    const pushX = nx * sep * dir1, pushY = ny * sep * dir1;
+    for (const plank of planks) {
+      if ((plank.cutReadyAt || 0) > nextCutToken) {
+        nextPlanks.push(plank);
+        cooldownSkips += 1;
+        continue;
+      }
 
-    const newType = target.type === 'log' ? 'custom' : target.type;
+      const localSaw = { x: x - plank.x, y: z - plank.z };
+      const l1 = { x: lineStart.x - plank.x, y: lineStart.y - plank.z };
+      const l2 = { x: lineEnd.x - plank.x, y: lineEnd.y - plank.z };
+      const hits = countLinePolygonIntersections(plank.points, l1, l2);
+      const containsSaw = pointInPolygon(localSaw, plank.points);
 
-    const p1 = { ...target, id: Math.random().toString(36), points: newPoints1, x: target.x + c1.x + pushX, z: target.z + c1.y + pushY, type: newType };
-    const p2 = { ...target, id: Math.random().toString(36), points: newPoints2, x: target.x + c2.x - pushX, z: target.z + c2.y - pushY, type: newType };
+      if (hits < 2 && !containsSaw) {
+        nextPlanks.push(plank);
+        continue;
+      }
 
-    const newPlanks = [...planks];
-    newPlanks.splice(hitIndex, 1, p1, p2);
-    setPlanks(newPlanks);
-    setExplosions(prev => [...prev, { id: Date.now(), pos: [x, 0.5, z], color: WOOD_TYPES[activeWoodType].color }]);
+      const result = slicePolygon(plank.points, l1, l2);
+      if (!result) {
+        nextPlanks.push(plank);
+        invalidSlices += 1;
+        continue;
+      }
+
+      const [poly1Points, poly2Points] = result;
+      const normalized1 = normalizePolygon(poly1Points);
+      const normalized2 = normalizePolygon(poly2Points);
+      if (!normalized1 || !normalized2) {
+        nextPlanks.push(plank);
+        invalidSlices += 1;
+        continue;
+      }
+      const c1 = getCentroid(normalized1);
+      const c2 = getCentroid(normalized2);
+      const newPoints1 = normalized1.map((p) => ({ x: p.x - c1.x, y: p.y - c1.y }));
+      const newPoints2 = normalized2.map((p) => ({ x: p.x - c2.x, y: p.y - c2.y }));
+
+      const vec1 = { x: c1.x - localSaw.x, y: c1.y - localSaw.y };
+      const dir1 = (vec1.x * nx + vec1.y * ny) >= 0 ? 1 : -1;
+      const splitSize = Math.max(getBounds(plank.points).w, getBounds(plank.points).d);
+      const sep = clamp(0.12 + (plank.thickness * 0.9) + (splitSize * 0.08), 0.22, 0.85);
+      const pushX = nx * sep * dir1;
+      const pushY = ny * sep * dir1;
+      const newType = plank.type === 'log' ? 'custom' : plank.type;
+
+      const p1 = {
+        ...plank,
+        id: makePieceId(),
+        points: newPoints1,
+        x: plank.x + c1.x + pushX,
+        z: plank.z + c1.y + pushY,
+        type: newType,
+        rotation: plank.rotation || [0, 0, 0],
+        cutReadyAt: nextCutToken + 1,
+      };
+      const p2 = {
+        ...plank,
+        id: makePieceId(),
+        points: newPoints2,
+        x: plank.x + c2.x - pushX,
+        z: plank.z + c2.y - pushY,
+        type: newType,
+        rotation: plank.rotation || [0, 0, 0],
+        cutReadyAt: nextCutToken + 1,
+      };
+
+      nextPlanks.push(p1, p2);
+      newExplosions.push({ id: Date.now() + cutCount, pos: [x, 0.5, z], color: WOOD_TYPES[activeWoodType].color });
+      cutCount += 1;
+    }
+
+    if (cutCount === 0) {
+      setLastCutSummary({ cutCount, cooldownSkips, invalidSlices, token: nextCutToken });
+      setErrorMsg("Missed!");
+      setTimeout(() => setErrorMsg(''), 1000);
+      return;
+    }
+
+    setPlanks(nextPlanks);
+    setExplosions((prev) => [...prev, ...newExplosions]);
+    setLastCutSummary({ cutCount, cooldownSkips, invalidSlices, token: nextCutToken });
   };
 
   const currentBounds = activePlank ? getBounds(activePlank.points) : { w: 2, d: 4 };
@@ -516,48 +705,57 @@ export default function LogConfigurator() {
         <div className="absolute top-4 left-4 right-4 z-10 flex justify-between pointer-events-none">
             <div className="flex gap-2 pointer-events-auto">
                 <button onClick={() => setViewMode(m => m === 'truck' ? 'studio' : 'truck')} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold shadow-md transition-all ${viewMode === 'truck' ? 'bg-orange-600 text-white' : 'bg-white text-stone-800'}`}><Truck className="w-4 h-4" /> {viewMode === 'truck' ? 'Studio' : 'Truck'}</button>
-                <button onClick={() => setPhysicsEnabled(!physicsEnabled)} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold shadow-md transition-all ${physicsEnabled ? 'bg-purple-600 text-white' : 'bg-white text-stone-800'}`}><Box className="w-4 h-4" /> {physicsEnabled ? 'Gravity ON' : 'Gravity OFF'}</button>
             </div>
         </div>
         {errorMsg && <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 bg-red-600 text-white px-4 py-2 rounded-full font-bold shadow-lg animate-bounce flex items-center gap-2"><AlertTriangle className="w-4 h-4"/> {errorMsg}</div>}
         
-        <Canvas shadows camera={{ position: [0, 10, 5], fov: 45 }} onPointerMissed={() => setSelectedId(null)}>
+        <Canvas
+          shadows
+          camera={{ position: [0, 10, 5], fov: 45 }}
+          onPointerMissed={() => {
+            if (draggingId) {
+              setDraggingId(null);
+            } else {
+              setSelectedId(null);
+            }
+          }}
+        >
           <ambientLight intensity={darkMode ? 0.4 : 0.8} />
           <directionalLight position={[10, 20, 10]} intensity={1.5} castShadow />
           <pointLight position={[-10, 5, -10]} intensity={0.5} />
           <Suspense fallback={<LoadingFallback />}>
-            <Physics gravity={[0, -9.8, 0]} isPaused={!physicsEnabled}>
-                <Center top={viewMode === 'studio'}> 
+            <Center top={viewMode === 'studio'}> 
+                <group>
+                    <RCDrivingSaw active={sawActive} onUpdatePos={setSawPos} sawRotation={sawRotation} onClickToCut={attemptCut} />
+                    {explosions.map(ex => <WoodExplosion key={ex.id} position={ex.pos} color={ex.color} />)}
                     <group>
-                        {!physicsEnabled && <RCDrivingSaw active={sawActive} onUpdatePos={setSawPos} sawRotation={sawRotation} onClickToCut={attemptCut} />}
-                        {explosions.map(ex => <WoodExplosion key={ex.id} position={ex.pos} color={ex.color} />)}
-                        <group>
-                            {viewMode === 'truck' ? (
-                                <IndianTruck physicsEnabled={physicsEnabled}>{planks.map(p => (
-                                    <HybridPlank 
-                                        key={p.id} data={p} isSelected={selectedId === p.id} onSelect={setSelectedId} 
-                                        onUpdate={(id, pos) => setPlanks(prev => prev.map(pl => pl.id === id ? { ...pl, ...pos } : pl))}
-                                        onDragStart={() => setIsDragging(true)} onDragEnd={() => setIsDragging(false)} 
-                                        sawActive={sawActive} physicsMode={physicsEnabled} woodTypeKey={activeWoodType} 
-                                    />
-                                ))}</IndianTruck>
-                            ) : (
-                                <>{physicsEnabled && <Floor />}{planks.map(p => (
-                                    <HybridPlank 
-                                        key={p.id} data={p} isSelected={selectedId === p.id} onSelect={setSelectedId} 
-                                        onUpdate={(id, pos) => setPlanks(prev => prev.map(pl => pl.id === id ? { ...pl, ...pos } : pl))}
-                                        onDragStart={() => setIsDragging(true)} onDragEnd={() => setIsDragging(false)} 
-                                        sawActive={sawActive} physicsMode={physicsEnabled} woodTypeKey={activeWoodType} 
-                                    />
-                                ))}</>
-                            )}
-                        </group>
+                        {viewMode === 'truck' ? (
+                            <IndianTruck>{planks.map(p => (
+                                <HybridPlank 
+                                    key={p.id} data={p} isSelected={selectedId === p.id} onSelect={setSelectedId} 
+                                    isDragging={draggingId === p.id}
+                                    onToggleDrag={(id) => setDraggingId((prev) => (prev === id ? null : id))}
+                                    onUpdate={(id, pos) => setPlanks(prev => prev.map(pl => pl.id === id ? { ...pl, ...pos } : pl))}
+                                    sawActive={sawActive} woodTypeKey={activeWoodType} 
+                                />
+                            ))}</IndianTruck>
+                        ) : (
+                            <><Floor />{planks.map(p => (
+                                <HybridPlank 
+                                    key={p.id} data={p} isSelected={selectedId === p.id} onSelect={setSelectedId} 
+                                    isDragging={draggingId === p.id}
+                                    onToggleDrag={(id) => setDraggingId((prev) => (prev === id ? null : id))}
+                                    onUpdate={(id, pos) => setPlanks(prev => prev.map(pl => pl.id === id ? { ...pl, ...pos } : pl))}
+                                    sawActive={sawActive} woodTypeKey={activeWoodType} 
+                                />
+                            ))}</>
+                        )}
                     </group>
-                </Center>
-            </Physics>
+                </group>
+            </Center>
           </Suspense>
           <Grid position={[0, -2, 0]} args={[20, 20]} cellSize={0.5} cellThickness={0.5} cellColor={darkMode ? "#444" : "#ccc"} sectionSize={3} fadeDistance={30} infiniteGrid />
-          <OrbitControls makeDefault enabled={!sawActive && !isDragging} minPolarAngle={0} maxPolarAngle={Math.PI / 2.1} target={[0, 0, 0]} />
+          <OrbitControls makeDefault enabled={!sawActive && !draggingId} minPolarAngle={0} maxPolarAngle={Math.PI / 2.1} target={[0, 0, 0]} />
         </Canvas>
       </div>
 
@@ -616,7 +814,7 @@ export default function LogConfigurator() {
                  <div className={`p-4 rounded-xl border-2 transition-all flex flex-col gap-4 ${sawActive ? 'border-orange-500 bg-orange-900/20' : (darkMode ? 'border-stone-700 bg-stone-800' : 'border-stone-100 bg-stone-50')}`}>
                     <div className="flex justify-between items-center">
                         <span className="font-bold flex items-center gap-2"><Navigation className={`w-4 h-4 ${sawActive ? 'animate-pulse' : ''}`} /> Power Saw</span>
-                        <button onClick={() => { setSawActive(!sawActive); setSelectedId(null); setPhysicsEnabled(false); }} className={`text-xs font-bold px-3 py-1 rounded-full border ${sawActive ? 'bg-orange-600 text-white' : (darkMode ? 'bg-stone-700 text-white' : 'bg-white text-stone-500')}`}>{sawActive ? 'STOP' : 'START'}</button>
+                        <button onClick={() => { setSawActive(!sawActive); setSelectedId(null); setDraggingId(null); }} className={`text-xs font-bold px-3 py-1 rounded-full border ${sawActive ? 'bg-orange-600 text-white' : (darkMode ? 'bg-stone-700 text-white' : 'bg-white text-stone-500')}`}>{sawActive ? 'STOP' : 'START'}</button>
                     </div>
                     {sawActive && (
                         <div className="space-y-2 animate-in fade-in">
@@ -625,6 +823,35 @@ export default function LogConfigurator() {
                         </div>
                     )}
                  </div>
+            </div>
+
+            {/* Cut Debug */}
+            <div className={`rounded-xl border ${darkMode ? 'border-stone-700 bg-stone-800' : 'border-stone-200 bg-stone-50'}`}>
+                <button
+                  onClick={() => setDebugOpen((prev) => !prev)}
+                  className="w-full p-3 text-left text-xs font-bold uppercase tracking-wider text-stone-500"
+                >
+                  Cut Debug {debugOpen ? 'Hide' : 'Show'}
+                </button>
+                {debugOpen && (
+                  <div className="px-3 pb-3 space-y-1 text-xs font-mono">
+                    {selectedDebug ? (
+                      <>
+                        <div>Area: {selectedDebug.area.toFixed(4)}</div>
+                        <div>Intersections: {selectedDebug.intersections}</div>
+                        <div>Contains Saw: {selectedDebug.containsSaw ? 'yes' : 'no'}</div>
+                        <div>Cut Ready: {selectedDebug.cutReady ? 'yes' : 'no'}</div>
+                        <div>Token: {selectedDebug.currentToken} / ReadyAt: {selectedDebug.cutReadyAt}</div>
+                        <div>W,L,T: {selectedDebug.width.toFixed(3)}, {selectedDebug.length.toFixed(3)}, {selectedDebug.thickness.toFixed(3)}</div>
+                      </>
+                    ) : (
+                      <div>No active piece</div>
+                    )}
+                    <div className="pt-2 border-t border-stone-300/40 dark:border-stone-600/50">
+                      LastCut: count={lastCutSummary.cutCount} cooldownSkips={lastCutSummary.cooldownSkips} invalid={lastCutSummary.invalidSlices} token={lastCutSummary.token}
+                    </div>
+                  </div>
+                )}
             </div>
 
             {/* Cut List & CSV */}
@@ -646,12 +873,12 @@ export default function LogConfigurator() {
                 </div>
             </div>
             
-            <button onClick={() => { setPlanks([{ id: 'master', points: [{x:-1,y:-2},{x:1,y:-2},{x:1,y:2},{x:-1,y:2}], thickness: 0.2, x: 0, z: 0, type: 'plank' }]); setExplosions([]); setSelectedId(null); }} className={`w-full py-3 rounded-xl border-2 font-bold flex items-center justify-center gap-2 transition-all ${darkMode ? 'border-stone-700 text-stone-400 hover:bg-stone-800' : 'border-stone-200 text-stone-600 hover:bg-stone-100'}`}><RefreshCw className="w-4 h-4"/> Reset All</button>
+            <button onClick={() => { setPlanks([{ id: 'master', points: [{x:-1,y:-2},{x:1,y:-2},{x:1,y:2},{x:-1,y:2}], thickness: 0.2, x: 0, z: 0, type: 'plank', rotation: [0,0,0], cutReadyAt: 0 }]); setExplosions([]); setSelectedId(null); setDraggingId(null); }} className={`w-full py-3 rounded-xl border-2 font-bold flex items-center justify-center gap-2 transition-all ${darkMode ? 'border-stone-700 text-stone-400 hover:bg-stone-800' : 'border-stone-200 text-stone-600 hover:bg-stone-100'}`}><RefreshCw className="w-4 h-4"/> Reset All</button>
         </div>
 
         {/* FIXED Footer */}
         <div className={`p-6 border-t flex-shrink-0 ${darkMode ? 'border-stone-700 bg-stone-900' : 'border-stone-100 bg-white'}`}>
-            <div className="flex justify-between items-end mb-4"><span className="text-stone-500 text-sm">Est. Price ({WOOD_TYPES[activeWoodType].name})</span><span className="text-4xl font-serif">${price.toLocaleString()}</span></div>
+            <div className="flex justify-between items-end mb-4"><span className="text-stone-500 text-sm">Est. Price ({WOOD_TYPES[activeWoodType].name})</span><span className="text-4xl font-serif">{formatCurrency(price)}</span></div>
             <button className={`w-full py-4 rounded-xl font-bold transition transform active:scale-95 shadow-lg ${darkMode ? 'bg-white text-black hover:bg-stone-200' : 'bg-stone-900 text-white hover:bg-black'}`}>Request Custom Quote</button>
         </div>
       </div>

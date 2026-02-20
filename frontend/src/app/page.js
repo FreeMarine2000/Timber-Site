@@ -5,7 +5,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import dynamic from 'next/dynamic';
 import { ShoppingBag, ArrowRight, Loader2, Cuboid, Sun, Moon } from 'lucide-react'; 
-import { getProducts } from '@/lib/api';
+import { getLocationCurrency, getProducts } from '@/lib/api';
 import { useCart } from '@/Context/CartContext';
 import { useTheme } from '@/components/Providers'; // Import Global Theme Hook
 import WoodGallery from '@/components/WoodGallery';
@@ -27,6 +27,8 @@ const TEXTURE_BANK = ["/wood1.png", "/wood2.png", "/wood3.png", "/wood4.png"];
 export default function Home() {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [currency, setCurrency] = useState('USD');
+  const [conversionRate, setConversionRate] = useState(1);
   const { cartCount, addToCart } = useCart();
   
   // GLOBAL THEME HOOK
@@ -49,8 +51,47 @@ export default function Home() {
     fetchData();
   }, []);
 
+  useEffect(() => {
+    const detectCurrency = async () => {
+      try {
+        const locale = navigator.language || 'en-US';
+        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+        const localeCountry = locale.includes('-') ? locale.split('-')[1].toUpperCase() : '';
+        const { currency: detectedCurrency, rate } = await getLocationCurrency({
+          locale,
+          timezone,
+          countryCode: localeCountry,
+        });
+
+        if (detectedCurrency === 'INR' || detectedCurrency === 'USD') {
+          setCurrency(detectedCurrency);
+          const normalizedRate = Number(rate);
+          setConversionRate(detectedCurrency === 'INR' && normalizedRate > 0 ? normalizedRate : 1);
+          return;
+        }
+      } catch (error) {
+        console.error('Landing currency detection failed:', error);
+      }
+
+      setCurrency('USD');
+      setConversionRate(1);
+    };
+
+    detectCurrency();
+  }, []);
+
   const getProductImage = (index) => TEXTURE_BANK[index % TEXTURE_BANK.length];
   const featuredProduct = products[0];
+  const formatCurrency = (amount) => {
+    const locale = currency === 'INR' ? 'en-IN' : 'en-US';
+    const displayAmount = (Number(amount) || 0) * conversionRate;
+    return new Intl.NumberFormat(locale, {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(displayAmount);
+  };
 
   return (
     <div className="min-h-screen bg-[#FDFCF8] dark:bg-stone-950 text-stone-900 dark:text-stone-100 font-sans selection:bg-orange-500 selection:text-white transition-colors duration-500">
@@ -126,7 +167,7 @@ export default function Home() {
                     <p className="text-xs font-bold uppercase tracking-widest text-orange-600 mb-2">Featured Slab</p>
                     <h3 className="text-2xl font-serif text-stone-900 dark:text-white">{featuredProduct.name}</h3>
                     <div className="mt-4 flex items-center justify-between">
-                      <p className="text-xl font-bold text-stone-900 dark:text-white">${featuredProduct.price}</p>
+                      <p className="text-xl font-bold text-stone-900 dark:text-white">{formatCurrency(featuredProduct.price)}</p>
                       <button onClick={() => addToCart(featuredProduct)} className="text-sm underline underline-offset-4 hover:text-orange-600 dark:text-stone-300 dark:hover:text-orange-500">
                         Add to Cart
                       </button>
@@ -196,7 +237,7 @@ export default function Home() {
                   <h3 className="text-lg font-bold text-stone-900 dark:text-white group-hover:underline decoration-orange-600 underline-offset-4 decoration-2">{product.name}</h3>
                   <div className="flex justify-between items-center text-sm">
                     <p className="text-stone-500 dark:text-stone-400 font-medium">{product.wood_type || 'Hardwood'}</p>
-                    <p className="text-stone-900 dark:text-white font-bold">${product.price}</p>
+                    <p className="text-stone-900 dark:text-white font-bold">{formatCurrency(product.price)}</p>
                   </div>
                 </div>
               </div>

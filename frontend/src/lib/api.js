@@ -26,7 +26,22 @@ export const getCategories = async () => {
   return response.data;
 };
 
-export const createOrderSnapshot = async (payload) => {
-  const response = await api.post('/orders/', payload);
+export const createOrderSnapshot = async (payload, location = {}) => {
+  const headers = {};
+  if (location.countryCode) headers['X-Country-Code'] = location.countryCode;
+  if (location.timezone) headers['X-Timezone'] = location.timezone;
+  if (location.locale) headers['X-Locale'] = location.locale;
+
+  const response = await api.post('/orders/', payload, { headers });
+  return response.data;
+};
+
+export const getLocationCurrency = async (location = {}) => {
+  const headers = {};
+  if (location.countryCode) headers['X-Country-Code'] = location.countryCode;
+  if (location.timezone) headers['X-Timezone'] = location.timezone;
+  if (location.locale) headers['X-Locale'] = location.locale;
+
+  const response = await api.get('/location/currency/', { headers });
   return response.data;
 };
